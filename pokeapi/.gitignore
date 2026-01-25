@@ -1,0 +1,33 @@
+# Rust build artifacts
+/target/
+Cargo.lock
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Rust-analyzer
+rust-project.json
+
+# Testing
+*.profraw
+*.profdata
+
+# Coverage
+lcov.info
+coverage/
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.bak
+
+# Python
+.venv/
+__pycache__/
