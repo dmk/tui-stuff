@@ -29,16 +29,53 @@ impl SpriteTarget {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PokemonInfo {
     pub name: String,
+    #[serde(default = "default_base_experience")]
+    pub base_experience: u16,
     pub hp: u16,
+    pub attack: u16,
+    pub defense: u16,
+    pub sp_attack: u16,
+    pub sp_defense: u16,
+    pub speed: u16,
     pub sprite_front_default: Option<String>,
     pub sprite_back_default: Option<String>,
     pub sprite_front_animated: Option<String>,
     pub sprite_back_animated: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ItemKind {
+    Potion,
+    SuperPotion,
+}
+
+impl ItemKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            ItemKind::Potion => "Potion",
+            ItemKind::SuperPotion => "Super Potion",
+        }
+    }
+
+    pub fn heal_amount(self) -> u16 {
+        match self {
+            ItemKind::Potion => 20,
+            ItemKind::SuperPotion => 50,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ItemStack {
+    pub kind: ItemKind,
+    pub qty: u16,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 pub struct SpriteState {
     pub sprite: Option<SpriteData>,
+    #[serde(default)]
+    pub sprite_flipped: Option<SpriteData>,
     pub frame_index: usize,
     pub frame_tick: u64,
     pub loading: bool,
@@ -47,6 +84,7 @@ pub struct SpriteState {
 impl SpriteState {
     pub fn reset(&mut self) {
         self.sprite = None;
+        self.sprite_flipped = None;
         self.frame_index = 0;
         self.frame_tick = 0;
         self.loading = false;
@@ -179,24 +217,53 @@ pub struct PlayerState {
     pub x: u16,
     pub y: u16,
     pub steps: u64,
+    pub facing: Direction,
 }
 
 impl PlayerState {
     pub fn new(x: u16, y: u16) -> Self {
-        Self { x, y, steps: 0 }
+        Self {
+            x,
+            y,
+            steps: 0,
+            facing: Direction::Down,
+        }
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GameMode {
+    MainMenu,
+    PokemonSelect,
     Overworld,
     Battle,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MenuState {
+    pub selected: usize,
+    pub has_save: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PokemonSelectState {
+    pub starters: Vec<String>,
+    pub selected: usize,
+    pub preview_info: Option<PokemonInfo>,
+    pub preview_sprite: SpriteState,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct PauseMenuState {
+    pub is_open: bool,
+    pub selected: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BattleStage {
     Intro,
     Menu,
+    ItemMenu,
     EnemyTurn,
     Victory,
     Escape,
@@ -207,42 +274,59 @@ pub enum BattleStage {
 pub struct BattleState {
     pub stage: BattleStage,
     pub enemy_name: String,
+    #[serde(default = "default_enemy_level")]
+    pub enemy_level: u8,
     pub player_hp: u16,
     pub player_hp_max: u16,
     pub enemy_hp: u16,
     pub enemy_hp_max: u16,
     pub menu_index: usize,
+    #[serde(default)]
+    pub item_index: usize,
     pub message: String,
     pub pending_enemy_damage: Option<u16>,
 }
 
 impl BattleState {
-    pub fn new(enemy_name: String, player_hp_max: u16) -> Self {
+    pub fn new(enemy_name: String, enemy_level: u8, player_hp_max: u16, player_hp: u16) -> Self {
         Self {
             stage: BattleStage::Intro,
             enemy_name,
-            player_hp: player_hp_max,
+            enemy_level,
+            player_hp: player_hp.min(player_hp_max),
             player_hp_max,
             enemy_hp: 1,
             enemy_hp_max: 1,
             menu_index: 0,
+            item_index: 0,
             message: "A wild Pokemon appeared!".to_string(),
             pending_enemy_damage: None,
         }
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AppState {
     pub terminal_size: (u16, u16),
     pub mode: GameMode,
     pub map: MapState,
     pub player: PlayerState,
     pub player_info: Option<PokemonInfo>,
+    #[serde(default = "default_player_level")]
+    pub player_level: u8,
+    #[serde(default = "default_player_exp")]
+    pub player_exp: u32,
+    #[serde(default = "default_player_hp")]
+    pub player_hp: u16,
+    #[serde(default = "default_inventory")]
+    pub inventory: Vec<ItemStack>,
     pub enemy_info: Option<PokemonInfo>,
     pub player_sprite: SpriteState,
     pub enemy_sprite: SpriteState,
     pub battle: Option<BattleState>,
+    pub menu: Option<MenuState>,
+    pub pokemon_select: Option<PokemonSelectState>,
+    pub pause_menu: PauseMenuState,
     pub message: Option<String>,
     pub steps_since_encounter: u16,
     pub rng_seed: u64,
@@ -261,15 +345,25 @@ impl AppState {
         let (start_x, start_y) = map.start_pos();
         Self {
             terminal_size: (80, 24),
-            mode: GameMode::Overworld,
+            mode: GameMode::MainMenu,
             map,
             player: PlayerState::new(start_x, start_y),
             player_info: None,
+            player_level: default_player_level(),
+            player_exp: default_player_exp(),
+            player_hp: default_player_hp(),
+            inventory: default_inventory(),
             enemy_info: None,
             player_sprite: SpriteState::default(),
             enemy_sprite: SpriteState::default(),
             battle: None,
-            message: Some("Walk through tall grass to find Pokemon.".to_string()),
+            menu: Some(MenuState {
+                selected: 0,
+                has_save: false,
+            }),
+            pokemon_select: None,
+            pause_menu: PauseMenuState::default(),
+            message: None,
             steps_since_encounter: 0,
             rng_seed: seed_from_time(),
             tick: 0,
@@ -284,7 +378,24 @@ impl AppState {
     }
 
     pub fn player_max_hp(&self) -> u16 {
-        self.player_info.as_ref().map(|info| info.hp).unwrap_or(35)
+        self.player_info
+            .as_ref()
+            .map(|info| calc_hp(info.hp, self.player_level))
+            .unwrap_or(35)
+    }
+
+    pub fn exp_to_next_level(&self) -> u32 {
+        if self.player_level >= MAX_LEVEL {
+            return 0;
+        }
+        let next = exp_for_level(self.player_level.saturating_add(1));
+        let current = exp_for_level(self.player_level);
+        next.saturating_sub(current)
+    }
+
+    pub fn exp_progress(&self) -> u32 {
+        let current = exp_for_level(self.player_level);
+        self.player_exp.saturating_sub(current)
     }
 }
 
@@ -316,6 +427,58 @@ impl DebugState for AppState {
 
 fn seed_from_time() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
     (now.as_secs() << 32) ^ now.subsec_nanos() as u64
+}
+
+pub const MAX_LEVEL: u8 = 100;
+
+pub fn exp_for_level(level: u8) -> u32 {
+    let level = level.max(1) as u32;
+    level.pow(3)
+}
+
+pub fn calc_hp(base: u16, level: u8) -> u16 {
+    let level = level.max(1) as u16;
+    (((2 * base + 31) * level) / 100) + level + 10
+}
+
+pub fn calc_stat(base: u16, level: u8) -> u16 {
+    let level = level.max(1) as u16;
+    (((2 * base + 31) * level) / 100) + 5
+}
+
+fn default_base_experience() -> u16 {
+    60
+}
+
+fn default_enemy_level() -> u8 {
+    5
+}
+
+fn default_player_level() -> u8 {
+    5
+}
+
+fn default_player_exp() -> u32 {
+    exp_for_level(default_player_level())
+}
+
+fn default_player_hp() -> u16 {
+    0
+}
+
+fn default_inventory() -> Vec<ItemStack> {
+    vec![
+        ItemStack {
+            kind: ItemKind::Potion,
+            qty: 3,
+        },
+        ItemStack {
+            kind: ItemKind::SuperPotion,
+            qty: 1,
+        },
+    ]
 }

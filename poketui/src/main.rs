@@ -8,6 +8,8 @@ mod state;
 mod ui;
 
 use std::io;
+use std::io::ErrorKind;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use clap::Parser;
@@ -22,7 +24,9 @@ use tui_dispatch::{
     EffectContext, EffectStoreLike, EffectStoreWithMiddleware, EventOutcome, RenderContext, TaskKey,
 };
 use tui_dispatch_debug::debug::DebugLayer;
-use tui_dispatch_debug::{DebugCliArgs, DebugRunOutput, DebugSession, DebugSessionError, ReplayItem};
+use tui_dispatch_debug::{
+    DebugCliArgs, DebugRunOutput, DebugSession, DebugSessionError, ReplayItem,
+};
 
 use crate::action::Action;
 use crate::effect::Effect;
@@ -121,7 +125,11 @@ fn handle_effect(effect: Effect, ctx: &mut EffectContext<Action>) {
             ctx.tasks().spawn(TaskKey::new(key), async move {
                 match api::fetch_pokemon(&name).await {
                     Ok(info) => Action::PokemonDidLoad { target, info },
-                    Err(error) => Action::PokemonDidError { target, name, error },
+                    Err(error) => Action::PokemonDidError {
+                        target,
+                        name,
+                        error,
+                    },
                 }
             });
         }
@@ -139,6 +147,49 @@ fn handle_effect(effect: Effect, ctx: &mut EffectContext<Action>) {
         }
         Effect::PlayAttackSound => {
             play_attack_sound();
+        }
+        Effect::CheckSaveExists => {
+            ctx.tasks().spawn(TaskKey::new("check_save"), async move {
+                let path = save_file_path();
+                Action::SaveExists(path.exists())
+            });
+        }
+        Effect::SaveGame { state } => {
+            ctx.tasks().spawn(TaskKey::new("save_game"), async move {
+                match save_game(&state).await {
+                    Ok(()) => Action::SaveComplete,
+                    Err(e) => Action::SaveError(e),
+                }
+            });
+        }
+        Effect::LoadGame => {
+            ctx.tasks().spawn(TaskKey::new("load_game"), async move {
+                match load_game().await {
+                    Ok(state) => Action::LoadComplete(Box::new(state)),
+                    Err(e) => Action::LoadError(e),
+                }
+            });
+        }
+        Effect::LoadStarterPreview { name } => {
+            ctx.tasks()
+                .spawn(TaskKey::new("starter_preview"), async move {
+                    match api::fetch_pokemon(&name).await {
+                        Ok(info) => Action::StarterPreviewLoaded { info },
+                        Err(error) => Action::StarterPreviewError { error },
+                    }
+                });
+        }
+        Effect::LoadStarterSprite { url } => {
+            ctx.tasks()
+                .spawn(TaskKey::new("starter_sprite"), async move {
+                    match api::fetch_bytes(&url).await {
+                        Ok(bytes) => match sprite::decode_sprite(&bytes, &url) {
+                            Ok(sprite) => Action::StarterPreviewSpriteLoaded { sprite },
+                            Err(error) => Action::StarterPreviewError { error },
+                        },
+                        Err(error) => Action::StarterPreviewError { error },
+                    }
+                });
         }
     }
 }
@@ -158,4 +209,40 @@ fn play_attack_sound() {
         sink.sleep_until_end();
         drop(stream);
     });
+}
+
+fn save_file_path() -> PathBuf {
+    let base = dirs_next::data_local_dir().unwrap_or_else(|| PathBuf::from("."));
+    base.join("poketui").join("save.json")
+}
+
+async fn save_game(state: &AppState) -> Result<(), String> {
+    let path = save_file_path();
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| format!("Failed to create save directory: {}", e))?;
+    }
+    let json =
+        serde_json::to_string_pretty(state).map_err(|e| format!("Failed to serialize: {}", e))?;
+    tokio::fs::write(&path, json)
+        .await
+        .map_err(|e| format!("Failed to write save file: {}", e))?;
+    Ok(())
+}
+
+async fn load_game() -> Result<AppState, String> {
+    let path = save_file_path();
+    let json = match tokio::fs::read_to_string(&path).await {
+        Ok(contents) => contents,
+        Err(e) => {
+            if e.kind() == ErrorKind::NotFound {
+                return Err("Save file not found.".to_string());
+            }
+            return Err(format!("Failed to read save file: {}", e));
+        }
+    };
+    let state: AppState =
+        serde_json::from_str(&json).map_err(|e| format!("Save file corrupted: {}", e))?;
+    Ok(state)
 }

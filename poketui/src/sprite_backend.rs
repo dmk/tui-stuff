@@ -84,10 +84,7 @@ impl<W: Write> Backend for SpriteBackend<W> {
         let current_ids: HashSet<u32> = sprites.iter().map(|e| e.id).collect();
         // Delete ALL previous sprites to clear old positions when sprites move
         for &id in &self.prev_ids {
-            queue!(
-                self.inner,
-                Print(format!("\x1b_Ga=d,d=i,i={id}\x1b\\"))
-            )?;
+            queue!(self.inner, Print(format!("\x1b_Ga=d,d=i,i={id}\x1b\\")))?;
         }
         for entry in &sprites {
             queue!(self.inner, MoveTo(entry.x, entry.y), Print(&entry.data))?;

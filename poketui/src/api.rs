@@ -17,6 +17,7 @@ struct NamedResource {
 #[derive(Clone, Debug, Deserialize)]
 struct PokemonResponse {
     name: String,
+    base_experience: Option<u16>,
     stats: Vec<PokemonStatSlot>,
     sprites: serde_json::Value,
 }
@@ -30,16 +31,25 @@ struct PokemonStatSlot {
 pub async fn fetch_pokemon(name: &str) -> Result<PokemonInfo, String> {
     let url = format!("{API_BASE}/pokemon/{name}");
     let response: PokemonResponse = fetch_json_cached(&url).await?;
-    let hp = response
-        .stats
-        .iter()
-        .find(|slot| slot.stat.name == "hp")
-        .map(|slot| slot.base_stat)
-        .unwrap_or(35);
+
+    let get_stat = |stat_name: &str| -> u16 {
+        response
+            .stats
+            .iter()
+            .find(|slot| slot.stat.name == stat_name)
+            .map(|slot| slot.base_stat)
+            .unwrap_or(35)
+    };
 
     Ok(PokemonInfo {
         name: response.name,
-        hp,
+        base_experience: response.base_experience.unwrap_or(60),
+        hp: get_stat("hp"),
+        attack: get_stat("attack"),
+        defense: get_stat("defense"),
+        sp_attack: get_stat("special-attack"),
+        sp_defense: get_stat("special-defense"),
+        speed: get_stat("speed"),
         sprite_front_default: pointer_string(&response.sprites, "/front_default"),
         sprite_back_default: pointer_string(&response.sprites, "/back_default"),
         sprite_front_animated: pointer_string(

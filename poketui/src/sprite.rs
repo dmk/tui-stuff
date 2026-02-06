@@ -1,7 +1,7 @@
 use std::io::Cursor;
 
 use base64::{engine::general_purpose, Engine as _};
-use image::{AnimationDecoder, GenericImageView, codecs::gif::GifDecoder};
+use image::{codecs::gif::GifDecoder, AnimationDecoder, GenericImageView};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -21,8 +21,73 @@ pub struct SpriteData {
 
 impl SpriteData {
     pub fn frame(&self, index: usize) -> &SpriteFrame {
-        let idx = if self.frames.is_empty() { 0 } else { index % self.frames.len() };
+        let idx = if self.frames.is_empty() {
+            0
+        } else {
+            index % self.frames.len()
+        };
         &self.frames[idx]
+    }
+
+    /// Returns a horizontally flipped version of this sprite
+    pub fn flipped(&self) -> SpriteData {
+        SpriteData {
+            frames: self.frames.iter().map(|f| f.flipped()).collect(),
+            width: self.width,
+            height: self.height,
+        }
+    }
+}
+
+impl SpriteFrame {
+    /// Returns a horizontally flipped version of this frame
+    pub fn flipped(&self) -> SpriteFrame {
+        // Decode the base64 payload
+        let bytes = match general_purpose::STANDARD.decode(&self.payload) {
+            Ok(b) => b,
+            Err(_) => return self.clone(),
+        };
+
+        // For RGBA format (format 32), flip horizontally
+        if self.format == 32 {
+            let mut flipped = bytes.clone();
+            let stride = (self.width * 4) as usize;
+            for y in 0..self.height as usize {
+                let row_start = y * stride;
+                for x in 0..(self.width as usize / 2) {
+                    let left = row_start + x * 4;
+                    let right = row_start + (self.width as usize - 1 - x) * 4;
+                    // Swap 4 bytes (RGBA)
+                    for i in 0..4 {
+                        flipped.swap(left + i, right + i);
+                    }
+                }
+            }
+            SpriteFrame {
+                payload: general_purpose::STANDARD.encode(&flipped),
+                width: self.width,
+                height: self.height,
+                format: self.format,
+            }
+        } else {
+            // For PNG format (100), decode and re-encode flipped
+            if let Ok(img) = image::load_from_memory(&bytes) {
+                let flipped_img = image::imageops::flip_horizontal(&img);
+                let mut buf = Vec::new();
+                if flipped_img
+                    .write_to(&mut Cursor::new(&mut buf), image::ImageFormat::Png)
+                    .is_ok()
+                {
+                    return SpriteFrame {
+                        payload: general_purpose::STANDARD.encode(&buf),
+                        width: self.width,
+                        height: self.height,
+                        format: self.format,
+                    };
+                }
+            }
+            self.clone()
+        }
     }
 }
 
@@ -70,7 +135,12 @@ pub fn decode_sprite(bytes: &[u8], url: &str) -> Result<SpriteData, String> {
     })
 }
 
-pub fn kitty_sequence(frame: &SpriteFrame, cols: u16, rows: u16, id: u32) -> Result<String, String> {
+pub fn kitty_sequence(
+    frame: &SpriteFrame,
+    cols: u16,
+    rows: u16,
+    id: u32,
+) -> Result<String, String> {
     let mut sequences = String::new();
     let chunk_size = 4096;
     let payload = frame.payload.as_bytes();
