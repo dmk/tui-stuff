@@ -1,14 +1,19 @@
 mod action;
 mod effect;
+mod icons;
 mod llm;
 mod persist;
 mod reducer;
 mod rules;
 mod scenario;
+mod sprite;
+mod sprite_backend;
 mod state;
 mod ui;
 
+use std::cell::RefCell;
 use std::io;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -23,12 +28,15 @@ use tui_dispatch::{
     EffectContext, EffectStoreLike, EffectStoreWithMiddleware, EventOutcome, RenderContext, TaskKey,
 };
 use tui_dispatch_debug::debug::DebugLayer;
-use tui_dispatch_debug::{DebugCliArgs, DebugRunOutput, DebugSession, DebugSessionError, ReplayItem};
+use tui_dispatch_debug::{
+    DebugCliArgs, DebugRunOutput, DebugSession, DebugSessionError, ReplayItem,
+};
 
 use crate::action::Action;
 use crate::effect::Effect;
 use crate::llm::{client_for, Provider};
 use crate::reducer::reducer;
+use crate::sprite_backend::SpriteBackend;
 use crate::state::AppState;
 
 #[derive(Parser, Debug)]
@@ -102,7 +110,7 @@ async fn main() -> io::Result<()> {
         enable_raw_mode()?;
         execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     }
-    let backend = ratatui::backend::CrosstermBackend::new(stdout);
+    let backend = SpriteBackend::new(stdout, sprite_backend::sprite_registry());
     let mut terminal = Terminal::new(backend)?;
 
     let result = run_app(&mut terminal, &debug, store, replay_actions, config.clone()).await;
@@ -135,6 +143,9 @@ async fn run_app<B: ratatui::backend::Backend>(
     config: RuntimeConfig,
 ) -> io::Result<DebugRunOutput<AppState>> {
     let config = Arc::new(config);
+    let ui = Rc::new(RefCell::new(ui::DndUi::new()));
+    let ui_render = ui.clone();
+    let ui_event = ui.clone();
     debug
         .run_effect_app(
             terminal,
@@ -151,10 +162,14 @@ async fn run_app<B: ratatui::backend::Backend>(
                     .subscriptions()
                     .interval("tick", Duration::from_millis(200), || Action::Tick);
             },
-            |frame, area, state, render_ctx: RenderContext| {
-                ui::render(frame, area, state, render_ctx);
+            move |frame, area, state, render_ctx: RenderContext| {
+                ui_render
+                    .borrow_mut()
+                    .render(frame, area, state, render_ctx);
             },
-            |event, state| -> EventOutcome<Action> { ui::handle_event(event, state) },
+            move |event, state| -> EventOutcome<Action> {
+                ui_event.borrow_mut().handle_event(event, state)
+            },
             |action| matches!(action, Action::Quit),
             move |effect, ctx| handle_effect(effect, ctx, config.clone()),
         )
@@ -190,24 +205,23 @@ fn handle_effect(effect: Effect, ctx: &mut EffectContext<Action>, config: Arc<Ru
             let provider = config.provider.clone();
             let model = config.model.clone();
             let base_url = config.ollama_base_url.clone();
-            ctx.tasks()
-                .spawn(TaskKey::new("llm_action"), async move {
-                    let api_key = std::env::var("OPENAI_API_KEY").ok();
-                    let client = match client_for(provider, model, api_key, base_url) {
-                        Ok(client) => client,
-                        Err(err) => return Action::LlmError(err.to_string()),
-                    };
-                    let mut sink = |_| {};
-                    match client.stream_chat(&request, &mut sink).await {
-                        Ok(raw_json) => {
-                            match crate::llm::schema::parse_action_interpretation(&raw_json) {
-                                Ok(parsed) => Action::CustomActionInterpreted(parsed),
-                                Err(err) => Action::LlmError(err),
-                            }
+            ctx.tasks().spawn(TaskKey::new("llm_action"), async move {
+                let api_key = std::env::var("OPENAI_API_KEY").ok();
+                let client = match client_for(provider, model, api_key, base_url) {
+                    Ok(client) => client,
+                    Err(err) => return Action::LlmError(err.to_string()),
+                };
+                let mut sink = |_| {};
+                match client.stream_chat(&request, &mut sink).await {
+                    Ok(raw_json) => {
+                        match crate::llm::schema::parse_action_interpretation(&raw_json) {
+                            Ok(parsed) => Action::CustomActionInterpreted(parsed),
+                            Err(err) => Action::LlmError(err),
                         }
-                        Err(err) => Action::LlmError(err.to_string()),
                     }
-                });
+                    Err(err) => Action::LlmError(err.to_string()),
+                }
+            });
         }
         Effect::SaveGame { state, since } => {
             ctx.tasks().spawn(TaskKey::new("save"), async move {
@@ -233,6 +247,12 @@ fn handle_effect(effect: Effect, ctx: &mut EffectContext<Action>, config: Arc<Ru
                 }
             });
         }
+        Effect::CheckSaveExists { path } => {
+            ctx.tasks().spawn(TaskKey::new("save_exists"), async move {
+                let exists = tokio::fs::try_exists(path).await.unwrap_or(false);
+                Action::SaveExists(exists)
+            });
+        }
     }
 }
 
@@ -241,7 +261,5 @@ fn save_file_path(save_dir: Option<&str>) -> String {
         .map(std::path::PathBuf::from)
         .or_else(|| dirs_next::data_local_dir().map(|dir| dir.join("dndtui")))
         .unwrap_or_else(|| std::path::PathBuf::from("."));
-    base.join("save.json")
-        .to_string_lossy()
-        .to_string()
+    base.join("save.json").to_string_lossy().to_string()
 }

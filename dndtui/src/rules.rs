@@ -178,21 +178,9 @@ pub fn next_u32(seed: &mut u64) -> u32 {
     (*seed >> 32) as u32
 }
 
-pub const CLASS_OPTIONS: &[&str] = &[
-    "Fighter",
-    "Rogue",
-    "Wizard",
-    "Ranger",
-    "Cleric",
-];
+pub const CLASS_OPTIONS: &[&str] = &["Fighter", "Rogue", "Wizard", "Ranger", "Cleric"];
 
-pub const BACKGROUND_OPTIONS: &[&str] = &[
-    "Soldier",
-    "Outlander",
-    "Scholar",
-    "Merchant",
-    "Acolyte",
-];
+pub const BACKGROUND_OPTIONS: &[&str] = &["Soldier", "Outlander", "Scholar", "Merchant", "Acolyte"];
 
 pub fn class_base_hp(class_name: &str) -> i32 {
     match class_name.to_lowercase().as_str() {

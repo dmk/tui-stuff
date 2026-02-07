@@ -1,6 +1,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashSet};
+use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tui_dispatch_debug::debug::{DebugSection, DebugState};
 
@@ -9,6 +9,7 @@ use crate::rules::{Ability, AbilityScores};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum GameMode {
+    MainMenu,
     CharacterCreation,
     Exploration,
     Dialogue,
@@ -183,6 +184,18 @@ pub enum CreationStep {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct MenuState {
+    pub selected: usize,
+    pub has_save: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct PauseMenuState {
+    pub is_open: bool,
+    pub selected: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct LogEntry {
     pub speaker: LogSpeaker,
     pub text: String,
@@ -226,6 +239,12 @@ pub struct AppState {
     pub custom_action: CustomActionState,
     pub combat: Option<CombatState>,
     pub creation: CharacterCreationState,
+    #[serde(default)]
+    pub menu: Option<MenuState>,
+    #[serde(default)]
+    pub pause_menu: PauseMenuState,
+    #[serde(default)]
+    pub inventory_selected: usize,
     pub log: Vec<LogEntry>,
     pub log_scroll: u16,
     pub scenario: Option<ScenarioManifestSummary>,
@@ -274,7 +293,9 @@ impl AppState {
                 input: String::new(),
                 history: Vec::new(),
             },
-            custom_action: CustomActionState { input: String::new() },
+            custom_action: CustomActionState {
+                input: String::new(),
+            },
             combat: None,
             creation: CharacterCreationState {
                 step: CreationStep::Name,
@@ -285,6 +306,9 @@ impl AppState {
                 selected_stat: 0,
                 points_remaining: 27,
             },
+            menu: None,
+            pause_menu: PauseMenuState::default(),
+            inventory_selected: 0,
             log: Vec::new(),
             log_scroll: 0,
             scenario: None,
@@ -355,6 +379,9 @@ impl DebugState for AppState {
                 .entry("entries", self.log.len().to_string())
                 .entry("scroll", self.log_scroll.to_string())
                 .entry("transcript_index", self.transcript_index.to_string()),
+            DebugSection::new("Inventory")
+                .entry("items", self.player.inventory.len().to_string())
+                .entry("selected", self.inventory_selected.to_string()),
         ]
     }
 }

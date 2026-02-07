@@ -82,7 +82,7 @@ pub enum TriggerSpec {
     OnInteract { x: u16, y: u16, message: String },
 }
 
-    pub async fn load_scenario(path: &Path) -> Result<ScenarioRuntime, String> {
+pub async fn load_scenario(path: &Path) -> Result<ScenarioRuntime, String> {
     let manifest_path = path.join("manifest.yaml");
     let manifest_str = tokio::fs::read_to_string(&manifest_path)
         .await
@@ -198,8 +198,8 @@ fn build_legend(entries: &[LegendEntry]) -> Result<HashMap<char, Tile>, String> 
             .chars()
             .next()
             .ok_or_else(|| "Legend entry missing character".to_string())?;
-        let tile = tile_from_name(&entry.tile)
-            .ok_or_else(|| format!("Unknown tile: {}", entry.tile))?;
+        let tile =
+            tile_from_name(&entry.tile).ok_or_else(|| format!("Unknown tile: {}", entry.tile))?;
         legend.insert(ch, tile);
     }
     Ok(legend)

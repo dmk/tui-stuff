@@ -1,14 +1,14 @@
+mod ollama;
+mod openai;
 pub mod prompt;
 pub mod schema;
-mod openai;
-mod ollama;
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-pub use openai::OpenAiClient;
 pub use ollama::OllamaClient;
+pub use openai::OpenAiClient;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, clap::ValueEnum)]
 #[serde(rename_all = "snake_case")]

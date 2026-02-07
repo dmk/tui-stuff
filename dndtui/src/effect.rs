@@ -8,4 +8,5 @@ pub enum Effect {
     SaveGame { state: Box<AppState>, since: usize },
     LoadGame { path: String },
     LoadScenario { path: String },
+    CheckSaveExists { path: String },
 }

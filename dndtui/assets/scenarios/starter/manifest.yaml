@@ -1,5 +1,5 @@
 id: "starter"
-name: "Green Hollow"
+name: "Green Hollow Frontier"
 map_path: "map.txt"
 legend:
   - ch: "#"
@@ -10,38 +10,140 @@ legend:
     tile: "road"
   - ch: "."
     tile: "floor"
+  - ch: "w"
+    tile: "water"
 player_start:
-  x: 3
-  y: 3
+  x: 5
+  y: 4
 npcs:
   - id: "mara"
     name: "Mara"
-    x: 8
-    y: 4
-    persona: "Warm but guarded, a village scout who trusts actions more than words."
-    dialogue_prompt: "Knows rumors about the old mill and the goblin path."
+    x: 10
+    y: 8
+    persona: "Warm but guarded, a village scout who keeps watch over the northern lanes."
+    dialogue_prompt: "Tracks goblin scouts and knows where patrols vanished near the bridge."
+  - id: "alder"
+    name: "Alder"
+    x: 16
+    y: 5
+    persona: "A practical quartermaster who counts every rope, ration, and rumor."
+    dialogue_prompt: "Keeps supply notes and can point out weak spots on the trade road."
+  - id: "sister_elowen"
+    name: "Sister Elowen"
+    x: 33
+    y: 19
+    persona: "Calm chapel keeper who studies old warding rites."
+    dialogue_prompt: "Understands the marsh lights and the key hidden near the old shrine."
+  - id: "tamsin"
+    name: "Tamsin"
+    x: 26
+    y: 9
+    persona: "Inventive millwright apprentice with grease-stained hands and sharp instincts."
+    dialogue_prompt: "Knows what happened at the eastern mill and who took over its lower floor."
+  - id: "garrick"
+    name: "Garrick"
+    x: 46
+    y: 25
+    persona: "Old ranger captain who has outlived too many border skirmishes."
+    dialogue_prompt: "Can brief you on safer routes through the marsh and mill perimeter."
 items:
   - id: "torch"
     name: "Torch"
-    x: 6
-    y: 5
+    x: 8
+    y: 6
+    qty: 1
+  - id: "healing_herb"
+    name: "Healing Herb Bundle"
+    x: 19
+    y: 15
+    qty: 2
+  - id: "rope"
+    name: "Silk Rope"
+    x: 24
+    y: 4
+    qty: 1
+  - id: "old_key"
+    name: "Old Iron Key"
+    x: 35
+    y: 18
+    qty: 1
+  - id: "rations"
+    name: "Trail Rations"
+    x: 45
+    y: 10
+    qty: 3
+  - id: "silver_dagger"
+    name: "Silver Dagger"
+    x: 28
+    y: 24
     qty: 1
 encounters:
-  - id: "goblin"
-    name: "Goblin"
-    x: 14
+  - id: "goblin_scout"
+    name: "Goblin Scout"
+    x: 20
     y: 5
-    hp: 7
+    hp: 8
     atk: 2
+  - id: "wolf_pack"
+    name: "Wolf Pack"
+    x: 14
+    y: 16
+    hp: 11
+    atk: 3
+  - id: "bandit_lookout"
+    name: "Bandit Lookout"
+    x: 30
+    y: 9
+    hp: 10
+    atk: 3
+  - id: "bog_wisp"
+    name: "Bog Wisp"
+    x: 33
+    y: 23
+    hp: 9
+    atk: 4
+  - id: "mill_ogre"
+    name: "Mill Ogre"
+    x: 47
+    y: 24
+    hp: 16
+    atk: 5
 triggers:
   - kind: "on_enter"
-    x: 5
-    y: 9
-    message: "Cold fog rolls in from the treeline."
+    x: 22
+    y: 18
+    message: "You reach the old crossroads where caravans once traded at all hours."
+  - kind: "on_enter"
+    x: 39
+    y: 18
+    message: "The plank bridge groans over dark water; something moves beneath it."
+  - kind: "on_enter"
+    x: 33
+    y: 23
+    message: "Pale lights drift above the marsh and whisper in a language you do not know."
+  - kind: "on_enter"
+    x: 46
+    y: 24
+    message: "The ruined mill looms ahead, its gears still turning without wind."
   - kind: "on_interact"
-    x: 6
-    y: 5
-    message: "You find a torch tucked into the grass."
+    x: 8
+    y: 6
+    message: "You collect a pitch-black torch wrapped in oilcloth."
+  - kind: "on_interact"
+    x: 19
+    y: 15
+    message: "You gather medicinal herbs that smell faintly of mint and iron."
+  - kind: "on_interact"
+    x: 35
+    y: 18
+    message: "You find an old iron key hidden beneath a cracked roadside marker."
+  - kind: "on_interact"
+    x: 28
+    y: 24
+    message: "A silver dagger rests in the mud, etched with worn warding runes."
 lore:
-  - "Green Hollow is a farming village on the edge of the mistwood."
-  - "Travelers warn of goblins using the old mill road at night."
+  - "Green Hollow grew from a farm hamlet into a frontier outpost guarding the mistwood road."
+  - "The eastern mill was abandoned after strange lights began pooling in the low marsh."
+  - "A hidden shrine near the crossroads once sealed a barrow beneath the wetlands."
+  - "Recent bandit raids suggest someone is directing monsters toward supply caravans."
+  - "Village elders fear the mill ogre is searching for the same iron key the shrine protects."

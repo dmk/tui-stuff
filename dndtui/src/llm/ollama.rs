@@ -83,10 +83,7 @@ impl LlmClient for OllamaClient {
                     continue;
                 }
                 if let Ok(value) = serde_json::from_str::<Value>(&line) {
-                    let done = value
-                        .get("done")
-                        .and_then(|d| d.as_bool())
-                        .unwrap_or(false);
+                    let done = value.get("done").and_then(|d| d.as_bool()).unwrap_or(false);
                     if let Some(content) = value
                         .get("message")
                         .and_then(|m| m.get("content"))

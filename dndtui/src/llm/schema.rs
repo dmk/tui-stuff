@@ -49,10 +49,7 @@ pub fn parse_json_loose<T: DeserializeOwned>(raw: &str) -> Result<T, String> {
         }
     }
 
-    Err(format!(
-        "invalid JSON: {}",
-        shorten(trimmed, 200)
-    ))
+    Err(format!("invalid JSON: {}", shorten(trimmed, 200)))
 }
 
 pub fn parse_dialogue_response(raw: &str) -> Result<DialogueResponse, String> {

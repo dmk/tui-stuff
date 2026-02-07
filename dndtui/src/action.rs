@@ -10,14 +10,23 @@ use crate::state::{AppState, Direction};
 pub enum Action {
     Init,
     UiTerminalResize(u16, u16),
+    UiRender,
     Tick,
 
     Move(Direction),
     Interact,
     Talk,
     OpenInventory,
+    InventorySelect(usize),
     OpenCustomAction,
     CloseOverlay,
+    MenuSelect(usize),
+    MenuConfirm,
+    SaveExists(bool),
+    PauseOpen,
+    PauseClose,
+    PauseSelect(usize),
+    PauseConfirm,
 
     DialogueInputChanged(String),
     DialogueSubmit,

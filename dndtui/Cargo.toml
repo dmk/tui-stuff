@@ -20,6 +20,8 @@ thiserror = "1"
 async-trait = "0.1"
 futures-util = "0.3"
 dirs-next = "2.0"
+base64 = "0.22"
+image = { version = "0.25", default-features = true }
 
 [dev-dependencies]
 pretty_assertions = "1"

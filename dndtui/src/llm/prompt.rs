@@ -47,6 +47,7 @@ pub fn build_action_request(state: &AppState, player_text: &str) -> LlmRequest {
         "You interpret player actions into a single rules check.\n\
 Return ONLY a single JSON object matching this schema:\n{}\n\n\
 Return strict JSON: use double quotes, no trailing commas, no markdown, no backticks, no extra text.\n\n\
+Always set \"kind\" to \"skill_check\".\n\
 Allowed skills: athletics, acrobatics, stealth, perception, persuasion, arcana.\n\
 Allowed abilities: strength, dexterity, constitution, intelligence, wisdom, charisma.\n\
 Difficulties: easy, medium, hard.\n\n\
