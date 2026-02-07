@@ -1,0 +1,14 @@
+[package]
+name = "lightline"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tui-dispatch = { version = "0.5.4", features = ["tasks", "subscriptions"] }
+ratatui = "0.29"
+crossterm = "0.28"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+schemars = { version = "0.8", features = ["derive"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+tui-map = { path = "../tui-map", features = ["ratatui"] }
