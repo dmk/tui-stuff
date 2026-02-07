@@ -11,7 +11,9 @@ use tui_dispatch::{EventKind, EventOutcome, RenderContext};
 use crate::action::Action;
 use crate::sprite;
 use crate::sprite_backend;
-use crate::state::{AppState, BattleStage, Direction as MoveDir, GameMode, Tile};
+use crate::state::{
+    calc_hp, AppState, BattleKind, BattleStage, Direction as MoveDir, GameMode, Tile,
+};
 
 const BG_BASE: Color = Color::Rgb(24, 36, 26);
 const BG_PANEL: Color = Color::Rgb(34, 58, 38);
@@ -29,7 +31,7 @@ const MAP_TILES_V: u16 = 9;
 
 const SPRITE_ID_PLAYER_MAP: u32 = 2;
 const SPRITE_ID_ENEMY_BATTLE: u32 = 3;
-const SPRITE_ID_PLAYER_BATTLE: u32 = 4;
+const SPRITE_ID_PARTY_BASE: u32 = 40;
 
 // Tile colors
 const TILE_GRASS: Color = Color::Rgb(34, 112, 58);
@@ -141,6 +143,9 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState, _ctx: RenderConte
             }
         }
     }
+    if state.message.is_some() {
+        render_message_modal(frame, area, state);
+    }
 }
 
 pub fn handle_event(event: &EventKind, state: &AppState) -> EventOutcome<Action> {
@@ -154,6 +159,14 @@ pub fn handle_event(event: &EventKind, state: &AppState) -> EventOutcome<Action>
 }
 
 fn handle_key(key: KeyEvent, state: &AppState) -> EventOutcome<Action> {
+    if state.message.is_some() {
+        return match key.code {
+            KeyCode::Enter | KeyCode::Char('z') | KeyCode::Char('Z') | KeyCode::Char(' ') => {
+                EventOutcome::action(Action::MessageNext)
+            }
+            _ => EventOutcome::ignored(),
+        };
+    }
     // Handle pause menu if open
     if state.pause_menu.is_open {
         return handle_pause_key(key, state);
@@ -484,16 +497,11 @@ fn render_pokemon_select(frame: &mut Frame, area: Rect, state: &AppState) {
     }
 }
 
-fn render_pause_menu(frame: &mut Frame, area: Rect, state: &AppState) {
-    // Clear sprites so they don't show through the modal
-    sprite_backend::clear_sprites();
-
-    // Dim the background
+fn dim_background(frame: &mut Frame, area: Rect) {
     let buf = frame.buffer_mut();
     for y in area.y..area.y + area.height {
         for x in area.x..area.x + area.width {
             let cell = &mut buf[(x, y)];
-            // Darken existing content
             if let Color::Rgb(r, g, b) = cell.bg {
                 cell.bg = Color::Rgb(r / 2, g / 2, b / 2);
             }
@@ -502,6 +510,23 @@ fn render_pause_menu(frame: &mut Frame, area: Rect, state: &AppState) {
             }
         }
     }
+}
+
+fn fill_area(frame: &mut Frame, area: Rect, bg: Color, fg: Color) {
+    let buf = frame.buffer_mut();
+    for y in area.y..area.y + area.height {
+        for x in area.x..area.x + area.width {
+            buf[(x, y)].set_char(' ').set_bg(bg).set_fg(fg);
+        }
+    }
+}
+
+fn render_pause_menu(frame: &mut Frame, area: Rect, state: &AppState) {
+    // Clear sprites so they don't show through the modal
+    sprite_backend::clear_sprites();
+
+    // Dim the background
+    dim_background(frame, area);
 
     // Draw modal in center
     let modal_width = 24;
@@ -511,12 +536,7 @@ fn render_pause_menu(frame: &mut Frame, area: Rect, state: &AppState) {
     let modal_area = Rect::new(modal_x, modal_y, modal_width, modal_height);
 
     // Clear the modal area first (fill with spaces and background color)
-    let buf = frame.buffer_mut();
-    for y in modal_area.y..modal_area.y + modal_area.height {
-        for x in modal_area.x..modal_area.x + modal_area.width {
-            buf[(x, y)].set_char(' ').set_bg(BG_PANEL).set_fg(TEXT_MAIN);
-        }
-    }
+    fill_area(frame, modal_area, BG_PANEL, TEXT_MAIN);
 
     let block = panel_block(" PAUSED ", BG_PANEL);
     let inner = block.inner(modal_area);
@@ -539,6 +559,86 @@ fn render_pause_menu(frame: &mut Frame, area: Rect, state: &AppState) {
     let paragraph = Paragraph::new(Text::from(lines))
         .alignment(Alignment::Center)
         .wrap(Wrap { trim: true });
+    frame.render_widget(paragraph, inner);
+}
+
+fn render_message_modal(frame: &mut Frame, area: Rect, state: &AppState) {
+    let Some(message) = state.message.as_deref() else {
+        return;
+    };
+
+    // Clear sprites so they don't show through the modal
+    sprite_backend::clear_sprites();
+
+    // Dim the background
+    dim_background(frame, area);
+
+    let modal_width = area.width.min(70).saturating_sub(4).max(28);
+    let modal_height = area.height.min(9).saturating_sub(4).max(5);
+    let modal_x = area.x + (area.width.saturating_sub(modal_width)) / 2;
+    let modal_y = area.y + (area.height.saturating_sub(modal_height)) / 2;
+    let modal_area = Rect::new(modal_x, modal_y, modal_width, modal_height);
+
+    fill_area(frame, modal_area, BG_PANEL, TEXT_MAIN);
+
+    let title = if state.mode == GameMode::Battle {
+        " BATTLE "
+    } else {
+        " MESSAGE "
+    };
+    let block = panel_block(title, BG_PANEL);
+    let inner = block.inner(modal_area);
+    frame.render_widget(block, modal_area);
+
+    let lines = vec![
+        Line::from(Span::styled(message, Style::default().fg(TEXT_MAIN))),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Enter/Z: Continue",
+            Style::default().fg(TEXT_DIM),
+        )),
+    ];
+    let paragraph = Paragraph::new(Text::from(lines))
+        .style(Style::default().fg(TEXT_MAIN))
+        .wrap(Wrap { trim: true })
+        .alignment(Alignment::Left);
+    frame.render_widget(paragraph, inner);
+}
+
+fn render_battle_message_modal(frame: &mut Frame, area: Rect, message: &str) {
+    if message.is_empty() {
+        return;
+    }
+
+    // Clear sprites so they don't show through the modal
+    sprite_backend::clear_sprites();
+
+    dim_background(frame, area);
+
+    let modal_width = area.width.min(72).saturating_sub(6).max(30);
+    let modal_height = area.height.min(9).saturating_sub(4).max(5);
+    let modal_x = area.x + (area.width.saturating_sub(modal_width)) / 2;
+    let modal_y = area.y + (area.height.saturating_sub(modal_height)) / 2;
+    let modal_area = Rect::new(modal_x, modal_y, modal_width, modal_height);
+
+    fill_area(frame, modal_area, BG_PANEL, TEXT_MAIN);
+
+    let block = panel_block(" BATTLE ", BG_PANEL);
+    let inner = block.inner(modal_area);
+    frame.render_widget(block, modal_area);
+
+    let lines = vec![
+        Line::from(Span::styled(message, Style::default().fg(TEXT_MAIN))),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Enter/Z: Continue",
+            Style::default().fg(TEXT_DIM),
+        )),
+    ];
+    let paragraph = Paragraph::new(Text::from(lines))
+        .style(Style::default().fg(TEXT_MAIN))
+        .wrap(Wrap { trim: true })
+        .alignment(Alignment::Left);
     frame.render_widget(paragraph, inner);
 }
 
@@ -574,6 +674,7 @@ fn render_overworld_header(frame: &mut Frame, area: Rect, state: &AppState) {
 
     let title = state.map.name.to_ascii_uppercase();
     let player = format_name(&state.player_name());
+    let level = state.active_level();
     let line = Line::from(vec![
         Span::styled(
             title,
@@ -583,7 +684,7 @@ fn render_overworld_header(frame: &mut Frame, area: Rect, state: &AppState) {
         ),
         Span::raw("  •  "),
         Span::styled(
-            format!("Partner {} Lv {}", player, state.player_level),
+            format!("Partner {} Lv {}", player, level),
             Style::default().fg(TEXT_MAIN),
         ),
         Span::raw("  •  "),
@@ -616,10 +717,22 @@ fn render_overworld_panel(frame: &mut Frame, area: Rect, state: &AppState) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(8), Constraint::Length(4)])
+        .split(inner);
+
     let hp_max = state.player_max_hp();
-    let hp_current = state.player_hp.min(hp_max);
+    let hp_current = state
+        .active_member()
+        .map(|member| member.hp)
+        .unwrap_or(state.player_max_hp())
+        .min(hp_max);
     let exp_current = state.exp_progress();
     let exp_next = state.exp_to_next_level().max(1);
+    let party_count = state.party.len();
+    let balls = pokeball_count(state);
+    let bag_summary = bag_summary(state);
     let lines = vec![
         Line::from(Span::styled(
             format_name(&state.player_name()),
@@ -627,20 +740,53 @@ fn render_overworld_panel(frame: &mut Frame, area: Rect, state: &AppState) {
                 .fg(ACCENT_GREEN)
                 .add_modifier(Modifier::BOLD),
         )),
-        Line::from(format!("Lv {}", state.player_level)),
+        Line::from(format!("Lv {}", state.active_level())),
         Line::from(""),
         meter_line("HP", hp_current as u32, hp_max as u32, 12, ACCENT_GREEN),
         meter_line("EXP", exp_current, exp_next, 12, ACCENT_GOLD),
         Line::from(""),
         Line::from(Span::styled(
-            format!("Bag: {}", inventory_summary(state)),
+            format!("Party: {}/3", party_count),
             Style::default().fg(TEXT_MAIN),
         )),
+        Line::from(Span::styled(
+            format!("Balls: x{}", balls),
+            Style::default().fg(TEXT_MAIN),
+        )),
+        Line::from(Span::styled(
+            format!("Bag: {}", bag_summary),
+            Style::default().fg(TEXT_DIM),
+        )),
+        if state.boss_defeated {
+            Line::from(Span::styled(
+                "Demo complete!",
+                Style::default()
+                    .fg(ACCENT_GOLD)
+                    .add_modifier(Modifier::BOLD),
+            ))
+        } else if state.has_relic {
+            Line::from(Span::styled(
+                "Relic acquired",
+                Style::default().fg(ACCENT_GOLD),
+            ))
+        } else {
+            Line::from("")
+        },
     ];
     let paragraph = Paragraph::new(Text::from(lines))
         .alignment(Alignment::Left)
         .wrap(Wrap { trim: true });
-    frame.render_widget(paragraph, inner);
+    frame.render_widget(paragraph, layout[0]);
+    render_party_sprite_strip(
+        frame,
+        layout[1],
+        state,
+        BG_PANEL_ALT,
+        SPRITE_ID_PARTY_BASE,
+        0.55,
+        1.0,
+        false,
+    );
 }
 
 fn render_map(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -709,6 +855,35 @@ fn render_map(frame: &mut Frame, area: Rect, state: &AppState) {
         }
     }
 
+    // Draw pickups
+    for pickup in &state.pickups {
+        let map_x = pickup.x;
+        let map_y = pickup.y;
+        if map_x < start_x
+            || map_y < start_y
+            || map_x >= start_x + view_tiles_h
+            || map_y >= start_y + view_tiles_v
+        {
+            continue;
+        }
+        if map_x == state.player.x && map_y == state.player.y {
+            continue;
+        }
+        let tile = state.map.tile(map_x, map_y);
+        let (color_main, color_alt) = tile_colors(tile);
+        let seed = tile_seed(map_x, map_y);
+        let bg = if seed % 2 == 0 { color_main } else { color_alt };
+        let tile_col = map_x - start_x;
+        let tile_row = map_y - start_y;
+        let cell_x = origin_x + tile_col * cols_per_tile;
+        let cell_y = origin_y + tile_row * rows_per_tile;
+        let center_x = cell_x + cols_per_tile / 2;
+        let center_y = cell_y + rows_per_tile / 2;
+        if let Some(cell) = buf.cell_mut((center_x, center_y)) {
+            cell.set_bg(bg).set_fg(ACCENT_GOLD).set_char('*');
+        }
+    }
+
     // Draw player sprite on top
     let player_sprite = match state.player.facing {
         MoveDir::Right => state
@@ -746,24 +921,38 @@ fn render_overworld_status(frame: &mut Frame, area: Rect, state: &AppState, show
         .message
         .as_deref()
         .unwrap_or("Wander the grass to find Pokemon.");
-    let lines = if show_hud {
-        vec![
+    if show_hud {
+        let lines = vec![
             Line::from(Span::styled(message, Style::default().fg(TEXT_MAIN))),
             Line::from(Span::styled(
                 "Arrows/WASD move  |  Esc menu",
                 Style::default().fg(TEXT_DIM),
             )),
-        ]
+        ];
+        let paragraph = Paragraph::new(Text::from(lines))
+            .style(Style::default().fg(TEXT_MAIN))
+            .wrap(Wrap { trim: true });
+        frame.render_widget(paragraph, inner);
     } else {
         let player = format_name(&state.player_name());
         let hp_max = state.player_max_hp();
-        let hp_current = state.player_hp.min(hp_max);
+        let hp_current = state
+            .active_member()
+            .map(|member| member.hp)
+            .unwrap_or(hp_max)
+            .min(hp_max);
         let exp_current = state.exp_progress();
         let exp_next = state.exp_to_next_level().max(1);
-        let bag_summary = inventory_summary(state);
+        let bag_summary = bag_summary(state);
+        let party_count = state.party.len();
+        let balls = pokeball_count(state);
         let bar_width = if area.width >= 80 { 26 } else { 16 };
-        vec![
-            Line::from(format!("Partner {}  Lv {}", player, state.player_level)),
+        let layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(6), Constraint::Length(4)])
+            .split(inner);
+        let lines = vec![
+            Line::from(format!("Partner {}  Lv {}", player, state.active_level())),
             meter_line(
                 "HP",
                 hp_current as u32,
@@ -773,20 +962,46 @@ fn render_overworld_status(frame: &mut Frame, area: Rect, state: &AppState, show
             ),
             meter_line("EXP", exp_current, exp_next, bar_width, ACCENT_GOLD),
             Line::from(format!(
-                "Steps {}  |  Bag {}",
-                state.player.steps, bag_summary
+                "Steps {}  |  Party {}/3  |  Balls x{}",
+                state.player.steps, party_count, balls
             )),
+            Line::from(format!("Bag {}", bag_summary)),
+            if state.boss_defeated {
+                Line::from(Span::styled(
+                    "Demo complete!",
+                    Style::default()
+                        .fg(ACCENT_GOLD)
+                        .add_modifier(Modifier::BOLD),
+                ))
+            } else if state.has_relic {
+                Line::from(Span::styled(
+                    "Relic acquired",
+                    Style::default().fg(ACCENT_GOLD),
+                ))
+            } else {
+                Line::from("")
+            },
             Line::from(Span::styled(message, Style::default().fg(TEXT_MAIN))),
             Line::from(Span::styled(
                 "Arrows/WASD move  |  Esc menu",
                 Style::default().fg(TEXT_DIM),
             )),
-        ]
-    };
-    let paragraph = Paragraph::new(Text::from(lines))
-        .style(Style::default().fg(TEXT_MAIN))
-        .wrap(Wrap { trim: true });
-    frame.render_widget(paragraph, inner);
+        ];
+        let paragraph = Paragraph::new(Text::from(lines))
+            .style(Style::default().fg(TEXT_MAIN))
+            .wrap(Wrap { trim: true });
+        frame.render_widget(paragraph, layout[0]);
+        render_party_sprite_strip(
+            frame,
+            layout[1],
+            state,
+            BG_PANEL_ALT,
+            SPRITE_ID_PARTY_BASE + 10,
+            0.55,
+            1.0,
+            false,
+        );
+    }
 }
 
 fn render_battle(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -798,7 +1013,7 @@ fn render_battle(frame: &mut Frame, area: Rect, state: &AppState) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(6),    // Pokemon area (flexible)
-            Constraint::Length(6), // Command box (fixed)
+            Constraint::Length(7), // Command box (fixed)
         ])
         .split(area);
 
@@ -810,7 +1025,11 @@ fn render_battle(frame: &mut Frame, area: Rect, state: &AppState) {
 
     render_enemy_panel(frame, pokemon_layout[0], state);
     render_player_panel(frame, pokemon_layout[1], state);
-    render_battle_text(frame, layout[1], state);
+    render_battle_command(frame, layout[1], state);
+
+    if let Some(battle) = state.battle.as_ref().filter(|battle| battle_should_show_modal(battle)) {
+        render_battle_message_modal(frame, area, &battle.message);
+    }
 }
 
 fn render_enemy_panel(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -819,8 +1038,17 @@ fn render_enemy_panel(frame: &mut Frame, area: Rect, state: &AppState) {
         .as_ref()
         .map(|battle| format_name(&battle.enemy_name))
         .unwrap_or_else(|| "Enemy".to_string());
-    let title = format!(" WILD {} ", enemy_name.to_ascii_uppercase());
-    let block = panel_block(title.as_str(), BG_PANEL);
+    let is_boss = state
+        .battle
+        .as_ref()
+        .map(|battle| battle.kind == crate::state::BattleKind::Boss)
+        .unwrap_or(false);
+    let title = if is_boss {
+        format!(" BOSS {} ", enemy_name.to_ascii_uppercase())
+    } else {
+        format!(" WILD {} ", enemy_name.to_ascii_uppercase())
+    };
+    let block = panel_block(title.as_str(), BG_PANEL_ALT);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -837,8 +1065,9 @@ fn render_enemy_stats(frame: &mut Frame, area: Rect, state: &AppState) {
     let Some(battle) = state.battle.as_ref() else {
         return;
     };
+    let bar_width = area.width.saturating_sub(6).min(16).max(8) as usize;
     let lines = vec![
-        hp_line(battle.enemy_hp, battle.enemy_hp_max),
+        hp_line_scaled(battle.enemy_hp, battle.enemy_hp_max, bar_width),
         Line::from(Span::styled(
             format!("Lv {}", battle.enemy_level),
             Style::default().fg(TEXT_DIM),
@@ -849,6 +1078,14 @@ fn render_enemy_stats(frame: &mut Frame, area: Rect, state: &AppState) {
 }
 
 fn render_enemy_sprite(frame: &mut Frame, area: Rect, state: &AppState) {
+    if state
+        .battle
+        .as_ref()
+        .map(|battle| battle.captured)
+        .unwrap_or(false)
+    {
+        return;
+    }
     if let Some(sprite) = state.enemy_sprite.sprite.as_ref() {
         let (cols, rows) = sprite_fit(sprite, area.width, area.height.saturating_sub(1));
         let sprite_frame = sprite.frame(state.enemy_sprite.frame_index);
@@ -881,12 +1118,20 @@ fn render_player_panel(frame: &mut Frame, area: Rect, state: &AppState) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    // Sprite on left (wide), stats on right (narrow)
     let layout = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Min(10), Constraint::Length(22)])
         .split(inner);
-    render_player_sprite(frame, layout[0], state);
+    render_party_sprite_strip(
+        frame,
+        layout[0],
+        state,
+        BG_PANEL,
+        SPRITE_ID_PARTY_BASE + 20,
+        0.88,
+        1.12,
+        true,
+    );
     render_player_stats(frame, layout[1], state);
 }
 
@@ -896,44 +1141,35 @@ fn render_player_stats(frame: &mut Frame, area: Rect, state: &AppState) {
         .as_ref()
         .map(|battle| (battle.player_hp, battle.player_hp_max))
         .unwrap_or((state.player_max_hp(), state.player_max_hp()));
-    let lines = vec![
-        hp_line(current, max),
+    let bar_width = area.width.saturating_sub(6).min(16).max(8) as usize;
+    let mut lines = vec![
+        hp_line_scaled(current, max, bar_width),
         Line::from(Span::styled(
-            format!("Lv {}", state.player_level),
+            format!("Lv {}", state.active_level()),
             Style::default().fg(TEXT_DIM),
         )),
     ];
+    if let Some(member) = state.active_member() {
+        if member.ability_cd > 0 {
+            lines.push(Line::from(Span::styled(
+                format!("Ability CD: {}", member.ability_cd),
+                Style::default().fg(TEXT_DIM),
+            )));
+        }
+    }
+    if let Some(battle) = state.battle.as_ref() {
+        if battle.guard_turns > 0 && battle.guard_pct > 0 {
+            lines.push(Line::from(Span::styled(
+                format!("Guard -{}% ({}t)", battle.guard_pct, battle.guard_turns),
+                Style::default().fg(ACCENT_GOLD),
+            )));
+        }
+    }
     let paragraph = Paragraph::new(Text::from(lines)).style(Style::default().fg(TEXT_MAIN));
     frame.render_widget(paragraph, area);
 }
 
-fn render_player_sprite(frame: &mut Frame, area: Rect, state: &AppState) {
-    if let Some(sprite) = state.player_sprite.sprite.as_ref() {
-        let (cols, rows) = sprite_fit(sprite, area.width, area.height.saturating_sub(1));
-        let sprite_frame = sprite.frame(state.player_sprite.frame_index);
-        if let Ok(sequence) =
-            sprite::kitty_sequence(sprite_frame, cols, rows, SPRITE_ID_PLAYER_BATTLE)
-        {
-            // Center horizontally, align to top
-            let offset_x = area.x.saturating_add(area.width.saturating_sub(cols) / 2);
-            let offset_y = area.y;
-            sprite_backend::set_sprite(SPRITE_ID_PLAYER_BATTLE, offset_x, offset_y, sequence);
-            return;
-        }
-    }
-
-    let content = if state.player_sprite.loading {
-        "[loading]"
-    } else {
-        "[no sprite]"
-    };
-    let paragraph = Paragraph::new(content)
-        .style(Style::default().fg(TEXT_DIM))
-        .alignment(Alignment::Center);
-    frame.render_widget(paragraph, area);
-}
-
-fn render_battle_text(frame: &mut Frame, area: Rect, state: &AppState) {
+fn render_battle_command(frame: &mut Frame, area: Rect, state: &AppState) {
     let block = panel_block("COMMAND", BG_PANEL_ALT);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -942,60 +1178,110 @@ fn render_battle_text(frame: &mut Frame, area: Rect, state: &AppState) {
         return;
     };
 
-    let mut lines = vec![Line::from(battle.message.clone())];
-    match battle.stage {
-        BattleStage::Menu => {
-            lines.push(Line::from(" "));
-            lines.push(battle_menu_line(battle.menu_index));
+    let is_compact = inner.width < 50;
+    let sections = if is_compact {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(3), Constraint::Min(3)])
+            .split(inner)
+    } else {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
+            .split(inner)
+    };
+
+    render_battle_prompt(frame, sections[0], battle);
+    render_battle_actions(frame, sections[1], state, battle);
+}
+
+fn render_battle_prompt(frame: &mut Frame, area: Rect, battle: &crate::state::BattleState) {
+    let mut lines = Vec::new();
+    if matches!(battle.stage, BattleStage::Menu | BattleStage::ItemMenu) {
+        lines.push(Line::from(Span::styled(
+            battle.message.clone(),
+            Style::default().fg(TEXT_MAIN),
+        )));
+        lines.push(Line::from(Span::styled(
+            "Arrows/WASD: Navigate",
+            Style::default().fg(TEXT_DIM),
+        )));
+        if battle.stage == BattleStage::ItemMenu {
+            lines.push(Line::from(Span::styled(
+                "Z/Enter: Use  |  Esc: Back",
+                Style::default().fg(TEXT_DIM),
+            )));
+        } else {
             lines.push(Line::from(Span::styled(
                 "Z/Enter: Select",
                 Style::default().fg(TEXT_DIM),
             )));
         }
-        BattleStage::ItemMenu => {
-            lines.push(Line::from(" "));
-            let item_lines = battle_item_lines(state, battle.item_index);
-            lines.extend(item_lines);
-            lines.push(Line::from(Span::styled(
-                "Z/Enter: Use  |  Esc: Back",
-                Style::default().fg(TEXT_DIM),
-            )));
-        }
-        BattleStage::Intro
-        | BattleStage::EnemyTurn
-        | BattleStage::Victory
-        | BattleStage::Escape
-        | BattleStage::Defeat => {
-            lines.push(Line::from(Span::styled(
-                "Z/Enter: Continue",
-                Style::default().fg(TEXT_DIM),
-            )));
-        }
+    } else {
+        lines.push(Line::from(Span::styled(
+            "Resolving turn...",
+            Style::default().fg(TEXT_DIM),
+        )));
+        lines.push(Line::from(Span::styled(
+            "Enter/Z: Continue",
+            Style::default().fg(TEXT_DIM),
+        )));
     }
-
     let paragraph = Paragraph::new(Text::from(lines))
         .style(Style::default().fg(TEXT_MAIN))
         .wrap(Wrap { trim: true });
-    frame.render_widget(paragraph, inner);
+    frame.render_widget(paragraph, area);
 }
 
-fn battle_menu_line(selected: usize) -> Line<'static> {
-    let options = ["FIGHT", "BAG", "RUN"];
-    let mut spans = Vec::new();
+fn render_battle_actions(
+    frame: &mut Frame,
+    area: Rect,
+    state: &AppState,
+    battle: &crate::state::BattleState,
+) {
+    let lines = match battle.stage {
+        BattleStage::Menu => battle_menu_lines(battle.menu_index, battle.kind),
+        BattleStage::ItemMenu => battle_item_lines(state, battle.item_index),
+        _ => vec![Line::from(Span::styled(
+            "Enter/Z: Continue",
+            Style::default().fg(TEXT_DIM),
+        ))],
+    };
+    let paragraph = Paragraph::new(Text::from(lines))
+        .style(Style::default().fg(TEXT_MAIN))
+        .wrap(Wrap { trim: true });
+    frame.render_widget(paragraph, area);
+}
+
+fn battle_menu_lines(selected: usize, kind: BattleKind) -> Vec<Line<'static>> {
+    let options = ["FIGHT", "BAG", "CATCH", "ABILITY", "RUN"];
+    let mut lines = Vec::new();
     for (idx, label) in options.iter().enumerate() {
+        let disabled = kind == BattleKind::Boss && (idx == 2 || idx == 4);
         let style = if idx == selected {
-            Style::default()
-                .fg(ACCENT_GREEN)
-                .add_modifier(Modifier::BOLD)
+            if disabled {
+                Style::default()
+                    .fg(TEXT_DIM)
+                    .bg(adjust_color(BG_PANEL_ALT, 10))
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+                    .fg(HIGHLIGHT_TEXT)
+                    .bg(HIGHLIGHT_BG)
+                    .add_modifier(Modifier::BOLD)
+            }
+        } else if disabled {
+            Style::default().fg(TEXT_DIM)
         } else {
             Style::default().fg(TEXT_MAIN)
         };
-        spans.push(Span::styled(label.to_string(), style));
-        if idx + 1 < options.len() {
-            spans.push(Span::raw("   "));
-        }
+        lines.push(Line::from(Span::styled(label.to_string(), style)));
     }
-    Line::from(spans)
+    lines
+}
+
+fn battle_should_show_modal(battle: &crate::state::BattleState) -> bool {
+    !matches!(battle.stage, BattleStage::Menu | BattleStage::ItemMenu)
 }
 
 fn map_viewport(state: &AppState, view_cols: u16, view_rows: u16) -> (u16, u16) {
@@ -1014,8 +1300,8 @@ fn map_viewport(state: &AppState, view_cols: u16, view_rows: u16) -> (u16, u16) 
     (start_x, start_y)
 }
 
-fn hp_line(current: u16, max: u16) -> Line<'static> {
-    let width: usize = 12;
+fn hp_line_scaled(current: u16, max: u16, width: usize) -> Line<'static> {
+    let width = width.max(6);
     let ratio = if max == 0 {
         0.0
     } else {
@@ -1126,6 +1412,12 @@ fn battle_item_lines(state: &AppState, selected: usize) -> Vec<Line<'static>> {
         .inventory
         .iter()
         .filter(|stack| stack.qty > 0)
+        .filter(|stack| {
+            matches!(
+                stack.kind,
+                crate::state::ItemKind::Potion | crate::state::ItemKind::SuperPotion
+            )
+        })
         .enumerate()
     {
         let label = format!("{} x{}", stack.kind.label(), stack.qty);
@@ -1144,10 +1436,10 @@ fn battle_item_lines(state: &AppState, selected: usize) -> Vec<Line<'static>> {
     lines
 }
 
-fn inventory_summary(state: &AppState) -> String {
+fn bag_summary(state: &AppState) -> String {
     let mut items = Vec::new();
     for stack in &state.inventory {
-        if stack.qty > 0 {
+        if stack.qty > 0 && stack.kind != crate::state::ItemKind::PokeBall {
             items.push(format!("{} x{}", stack.kind.label(), stack.qty));
         }
     }
@@ -1156,6 +1448,158 @@ fn inventory_summary(state: &AppState) -> String {
     } else {
         items.join(", ")
     }
+}
+
+fn render_party_sprite_strip(
+    frame: &mut Frame,
+    area: Rect,
+    state: &AppState,
+    bg: Color,
+    sprite_base: u32,
+    scale: f32,
+    active_boost: f32,
+    show_shadow: bool,
+) {
+    if area.width == 0 || area.height == 0 || state.party.is_empty() {
+        return;
+    }
+    let buf = frame.buffer_mut();
+    for y in area.y..area.y.saturating_add(area.height) {
+        for x in area.x..area.x.saturating_add(area.width) {
+            if let Some(cell) = buf.cell_mut((x, y)) {
+                cell.set_bg(bg).set_fg(bg).set_char(' ');
+            }
+        }
+    }
+    let slots = state.party.len().max(1);
+    let slot_width = (area.width / slots as u16).max(1);
+    for (idx, member) in state.party.iter().enumerate() {
+        let slot_x = area.x + (idx as u16 * slot_width);
+        let width = if idx + 1 == slots {
+            area.x.saturating_add(area.width).saturating_sub(slot_x)
+        } else {
+            slot_width
+        };
+        let slot = Rect::new(slot_x, area.y, width.max(1), area.height);
+        let is_active = idx == state.active_party_index;
+        let mut scale = scale;
+        if is_active {
+            scale = (scale * active_boost).clamp(0.1, 1.2);
+        }
+        let sprite_state = state.party_sprites.get(idx);
+        let draw_hp_bar = show_shadow || sprite_state.and_then(|state| state.sprite.as_ref()).is_none();
+        let can_draw_shadow = is_active && show_shadow && slot.height >= 2;
+        let reserved_rows = (if draw_hp_bar { 1 } else { 0 }) + (if can_draw_shadow { 1 } else { 0 });
+        let sprite_height = slot.height.saturating_sub(reserved_rows as u16);
+        let sprite_area = Rect::new(slot.x, slot.y, slot.width, sprite_height.max(1));
+        let mut sprite_drawn = false;
+
+        if let Some(sprite_state) = sprite_state {
+            if let Some(sprite) = sprite_state.sprite.as_ref() {
+            if sprite_height > 0 {
+                let (cols, rows) =
+                    sprite_fit_scaled(sprite, sprite_area.width, sprite_area.height, scale);
+                let frame_data = sprite.frame(sprite_state.frame_index);
+                if let Ok(sequence) =
+                    sprite::kitty_sequence(frame_data, cols, rows, sprite_base + idx as u32)
+                {
+                    let offset_x = sprite_area
+                        .x
+                        .saturating_add(sprite_area.width.saturating_sub(cols) / 2);
+                    let offset_y = sprite_area
+                        .y
+                        .saturating_add(sprite_area.height.saturating_sub(rows) / 2);
+                    sprite_backend::set_sprite(
+                        sprite_base + idx as u32,
+                        offset_x,
+                        offset_y,
+                        sequence,
+                    );
+                    sprite_drawn = true;
+                }
+            }
+            }
+        }
+
+        if can_draw_shadow {
+            let shadow_color = adjust_color(bg, -20);
+            let shadow_width = (slot.width as f32 * 0.6).round().max(1.0) as u16;
+            let shadow_x = slot
+                .x
+                .saturating_add(slot.width.saturating_sub(shadow_width) / 2);
+            let shadow_y = slot.y.saturating_add(slot.height.saturating_sub(1));
+            for x in shadow_x..shadow_x.saturating_add(shadow_width) {
+                if let Some(cell) = buf.cell_mut((x, shadow_y)) {
+                    cell.set_bg(shadow_color).set_fg(shadow_color).set_char('▄');
+                }
+            }
+        }
+
+        let bar_y = if draw_hp_bar && slot.height > 0 {
+            let mut y = slot.y.saturating_add(slot.height.saturating_sub(1));
+            if can_draw_shadow && y > slot.y {
+                y = y.saturating_sub(1);
+            }
+            Some(y)
+        } else {
+            None
+        };
+
+        if let Some(bar_y) = bar_y {
+            let max_hp = calc_hp(member.info.hp, member.level).max(1);
+            let ratio = (member.hp.min(max_hp) as f32) / (max_hp as f32);
+            let bar_width = slot
+                .width
+                .saturating_sub(2)
+                .min(12)
+                .max(4)
+                .min(slot.width);
+            let start_x = slot
+                .x
+                .saturating_add(slot.width.saturating_sub(bar_width) / 2);
+            let filled = ((ratio * bar_width as f32).round() as u16).min(bar_width);
+            let color = if ratio > 0.5 {
+                ACCENT_GREEN
+            } else if ratio > 0.2 {
+                ACCENT_GOLD
+            } else {
+                Color::Rgb(220, 96, 96)
+            };
+            for i in 0..bar_width {
+                let (ch, fg) = if i < filled {
+                    ('█', color)
+                } else {
+                    ('░', TEXT_DIM)
+                };
+                if let Some(cell) = buf.cell_mut((start_x + i, bar_y)) {
+                    cell.set_bg(bg).set_fg(fg).set_char(ch);
+                }
+            }
+        }
+        if !sprite_drawn {
+            let label = member
+                .info
+                .name
+                .chars()
+                .next()
+                .map(|ch| ch.to_ascii_uppercase())
+                .unwrap_or('?');
+            let cx = sprite_area.x + sprite_area.width / 2;
+            let cy = sprite_area.y + sprite_area.height / 2;
+            if let Some(cell) = buf.cell_mut((cx, cy)) {
+                cell.set_bg(bg).set_fg(TEXT_DIM).set_char(label);
+            }
+        }
+    }
+}
+
+fn pokeball_count(state: &AppState) -> u16 {
+    state
+        .inventory
+        .iter()
+        .find(|stack| stack.kind == crate::state::ItemKind::PokeBall)
+        .map(|stack| stack.qty)
+        .unwrap_or(0)
 }
 
 fn format_name(name: &str) -> String {

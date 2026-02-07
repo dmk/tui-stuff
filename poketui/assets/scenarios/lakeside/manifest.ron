@@ -1,0 +1,41 @@
+(
+  id: "lakeside",
+  name: "Lakeside Route",
+  map_path: "map.txt",
+  starters: ["pikachu", "charmander", "bulbasaur", "squirtle"],
+  wild_pool: ["pidgey", "rattata", "caterpie", "weedle", "oddish", "zubat"],
+  events: [
+    (
+      id: "lake_sign",
+      trigger: (kind: "on_enter_tile", x: 10, y: 12),
+      message: "The lake is calm today.",
+      once: false,
+    ),
+    (
+      id: "rattata_clear",
+      trigger: (kind: "on_defeat", species: "rattata", count: 2),
+      message: "The rattata pack is thinning.",
+      once: true,
+    ),
+  ],
+  random_pickups: (
+    count: 6,
+    pool: [
+      (kind: Potion, weight: 5, qty: 1),
+      (kind: SuperPotion, weight: 2, qty: 1),
+      (kind: PokeBall, weight: 4, qty: 2),
+    ],
+  ),
+  abilities: [
+    (id: "spark", name: "Spark", cooldown: 3, effect: (kind: "damage", power: 55)),
+    (id: "ember_burst", name: "Ember Burst", cooldown: 3, effect: (kind: "damage", power: 50)),
+    (id: "vine_heal", name: "Vine Heal", cooldown: 4, effect: (kind: "heal", amount: 12)),
+    (id: "shell_guard", name: "Shell Guard", cooldown: 4, effect: (kind: "guard", reduction_pct: 40, turns: 2)),
+  ],
+  species_abilities: [
+    (species: "pikachu", ability_id: "spark"),
+    (species: "charmander", ability_id: "ember_burst"),
+    (species: "bulbasaur", ability_id: "vine_heal"),
+    (species: "squirtle", ability_id: "shell_guard"),
+  ],
+)

@@ -2,9 +2,10 @@ use std::io::Cursor;
 
 use base64::{engine::general_purpose, Engine as _};
 use image::{codecs::gif::GifDecoder, AnimationDecoder, GenericImageView};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SpriteFrame {
     pub payload: String,
     pub width: u32,
@@ -12,7 +13,7 @@ pub struct SpriteFrame {
     pub format: u32,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SpriteData {
     pub frames: Vec<SpriteFrame>,
     pub width: u32,

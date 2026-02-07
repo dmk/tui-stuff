@@ -2,6 +2,7 @@ mod action;
 mod api;
 mod effect;
 mod reducer;
+mod scenario;
 mod sprite;
 mod sprite_backend;
 mod state;
@@ -40,17 +41,23 @@ use crate::state::AppState;
 struct Args {
     #[command(flatten)]
     debug: DebugCliArgs,
+    /// Scenario directory (manifest.ron + map.txt)
+    #[arg(long, default_value = "assets/scenarios/lakeside")]
+    scenario: String,
 }
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
     let args = Args::parse();
     let debug = DebugSession::new(args.debug);
+    debug.save_state_schema::<AppState>().map_err(debug_error)?;
+    debug.save_actions_schema::<Action>().map_err(debug_error)?;
 
-    let state = debug
+    let mut state = debug
         .load_state_or_else_async(|| async { Ok::<AppState, io::Error>(AppState::new()) })
         .await
         .map_err(debug_error)?;
+    state.scenario_dir = args.scenario.clone();
     let replay_actions = debug.load_replay_items().map_err(debug_error)?;
     let (middleware, recorder) = debug.middleware_with_recorder();
     let store = EffectStoreWithMiddleware::new(state, reducer, middleware);
@@ -190,6 +197,28 @@ fn handle_effect(effect: Effect, ctx: &mut EffectContext<Action>) {
                         Err(error) => Action::StarterPreviewError { error },
                     }
                 });
+        }
+        Effect::LoadScenario { path } => {
+            ctx.tasks()
+                .spawn(TaskKey::new("scenario_load"), async move {
+                    let path = std::path::PathBuf::from(path);
+                    match scenario::load_scenario(&path).await {
+                        Ok(scenario) => Action::ScenarioLoaded { scenario },
+                        Err(error) => Action::ScenarioLoadError { error },
+                    }
+                });
+        }
+        Effect::LoadPartySprite { index, url } => {
+            let key = format!("party_sprite_{}", index);
+            ctx.tasks().spawn(TaskKey::new(key), async move {
+                match api::fetch_bytes(&url).await {
+                    Ok(bytes) => match sprite::decode_sprite(&bytes, &url) {
+                        Ok(sprite) => Action::PartySpriteLoaded { index, sprite },
+                        Err(error) => Action::PartySpriteError { index, error },
+                    },
+                    Err(error) => Action::PartySpriteError { index, error },
+                }
+            });
         }
     }
 }

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -58,7 +58,7 @@ pub fn clear_sprites() {
 pub struct SpriteBackend<W: Write> {
     inner: CrosstermBackend<W>,
     registry: Arc<Mutex<SpriteRegistry>>,
-    prev_ids: HashSet<u32>,
+    prev_entries: HashMap<u32, SpriteEntry>,
 }
 
 impl<W: Write> SpriteBackend<W> {
@@ -66,7 +66,7 @@ impl<W: Write> SpriteBackend<W> {
         Self {
             inner: CrosstermBackend::new(writer),
             registry,
-            prev_ids: HashSet::new(),
+            prev_entries: HashMap::new(),
         }
     }
 }
@@ -81,15 +81,40 @@ impl<W: Write> Backend for SpriteBackend<W> {
             let registry = self.registry.lock().expect("sprite registry lock");
             registry.entries()
         };
-        let current_ids: HashSet<u32> = sprites.iter().map(|e| e.id).collect();
-        // Delete ALL previous sprites to clear old positions when sprites move
-        for &id in &self.prev_ids {
-            queue!(self.inner, Print(format!("\x1b_Ga=d,d=i,i={id}\x1b\\")))?;
+        let mut current_entries = HashMap::with_capacity(sprites.len());
+        for entry in sprites {
+            current_entries.insert(entry.id, entry);
         }
-        for entry in &sprites {
-            queue!(self.inner, MoveTo(entry.x, entry.y), Print(&entry.data))?;
+
+        // Delete sprites that disappeared or changed
+        for (id, prev) in &self.prev_entries {
+            match current_entries.get(id) {
+                None => {
+                    queue!(self.inner, Print(format!("\x1b_Ga=d,d=i,i={id}\x1b\\")))?;
+                }
+                Some(cur)
+                    if cur.x != prev.x || cur.y != prev.y || cur.data != prev.data =>
+                {
+                    queue!(self.inner, Print(format!("\x1b_Ga=d,d=i,i={id}\x1b\\")))?;
+                }
+                _ => {}
+            }
         }
-        self.prev_ids = current_ids;
+
+        // Draw sprites that are new or changed
+        for (id, cur) in &current_entries {
+            match self.prev_entries.get(id) {
+                None => {
+                    queue!(self.inner, MoveTo(cur.x, cur.y), Print(&cur.data))?;
+                }
+                Some(prev) if cur.x != prev.x || cur.y != prev.y || cur.data != prev.data => {
+                    queue!(self.inner, MoveTo(cur.x, cur.y), Print(&cur.data))?;
+                }
+                _ => {}
+            }
+        }
+
+        self.prev_entries = current_entries;
         Ok(())
     }
 

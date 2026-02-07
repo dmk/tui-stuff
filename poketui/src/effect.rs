@@ -5,6 +5,8 @@ pub enum Effect {
     LoadPokemon { target: SpriteTarget, name: String },
     LoadSprite { target: SpriteTarget, url: String },
     PlayAttackSound,
+    LoadScenario { path: String },
+    LoadPartySprite { index: usize, url: String },
 
     // Save/Load
     CheckSaveExists,

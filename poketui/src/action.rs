@@ -1,9 +1,11 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::scenario::ScenarioRuntime;
 use crate::sprite::SpriteData;
 use crate::state::{AppState, Direction, PokemonInfo, SpriteTarget};
 
-#[derive(tui_dispatch::Action, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(tui_dispatch::Action, Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[action(infer_categories)]
 pub enum Action {
     Init,
@@ -16,6 +18,7 @@ pub enum Action {
     BattleMenuPrev,
     BattleConfirm,
     BattleItemCancel,
+    MessageNext,
 
     // Main menu actions
     MenuSelect(usize),
@@ -48,6 +51,24 @@ pub enum Action {
     LoadGame,
     LoadComplete(Box<AppState>),
     LoadError(String),
+
+    // Scenario loading
+    ScenarioLoaded {
+        scenario: ScenarioRuntime,
+    },
+    ScenarioLoadError {
+        error: String,
+    },
+
+    // Party sprites
+    PartySpriteLoaded {
+        index: usize,
+        sprite: SpriteData,
+    },
+    PartySpriteError {
+        index: usize,
+        error: String,
+    },
 
     // Pokemon loading
     PokemonDidLoad {

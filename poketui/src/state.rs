@@ -1,9 +1,12 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet, VecDeque};
 use tui_dispatch_debug::debug::{ron_string, DebugSection, DebugState};
 
+use crate::scenario::ScenarioRuntime;
 use crate::sprite::SpriteData;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum Direction {
     Up,
     Down,
@@ -11,7 +14,7 @@ pub enum Direction {
     Right,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum SpriteTarget {
     Player,
     Enemy,
@@ -26,7 +29,7 @@ impl SpriteTarget {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct PokemonInfo {
     pub name: String,
     #[serde(default = "default_base_experience")]
@@ -43,10 +46,23 @@ pub struct PokemonInfo {
     pub sprite_back_animated: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct PartyMember {
+    pub info: PokemonInfo,
+    pub level: u8,
+    pub exp: u32,
+    pub hp: u16,
+    #[serde(default)]
+    pub ability_id: Option<String>,
+    #[serde(default)]
+    pub ability_cd: u8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum ItemKind {
     Potion,
     SuperPotion,
+    PokeBall,
 }
 
 impl ItemKind {
@@ -54,6 +70,7 @@ impl ItemKind {
         match self {
             ItemKind::Potion => "Potion",
             ItemKind::SuperPotion => "Super Potion",
+            ItemKind::PokeBall => "Poke Ball",
         }
     }
 
@@ -61,17 +78,18 @@ impl ItemKind {
         match self {
             ItemKind::Potion => 20,
             ItemKind::SuperPotion => 50,
+            ItemKind::PokeBall => 0,
         }
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ItemStack {
     pub kind: ItemKind,
     pub qty: u16,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default, JsonSchema)]
 pub struct SpriteState {
     pub sprite: Option<SpriteData>,
     #[serde(default)]
@@ -91,7 +109,7 @@ impl SpriteState {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum Tile {
     Grass,
     Path,
@@ -100,7 +118,7 @@ pub enum Tile {
     Water,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct MapState {
     pub name: String,
     pub width: u16,
@@ -212,7 +230,7 @@ impl MapState {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct PlayerState {
     pub x: u16,
     pub y: u16,
@@ -231,7 +249,7 @@ impl PlayerState {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum GameMode {
     MainMenu,
     PokemonSelect,
@@ -239,13 +257,13 @@ pub enum GameMode {
     Battle,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct MenuState {
     pub selected: usize,
     pub has_save: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct PokemonSelectState {
     pub starters: Vec<String>,
     pub selected: usize,
@@ -253,26 +271,35 @@ pub struct PokemonSelectState {
     pub preview_sprite: SpriteState,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct PauseMenuState {
     pub is_open: bool,
     pub selected: usize,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum BattleStage {
     Intro,
     Menu,
     ItemMenu,
+    PlayerCombo,
     EnemyTurn,
     Victory,
     Escape,
     Defeat,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum BattleKind {
+    Wild,
+    Boss,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct BattleState {
     pub stage: BattleStage,
+    #[serde(default = "default_battle_kind")]
+    pub kind: BattleKind,
     pub enemy_name: String,
     #[serde(default = "default_enemy_level")]
     pub enemy_level: u8,
@@ -283,14 +310,29 @@ pub struct BattleState {
     pub menu_index: usize,
     #[serde(default)]
     pub item_index: usize,
+    #[serde(default)]
+    pub combo_hits: Vec<ComboHit>,
+    #[serde(default)]
+    pub guard_pct: u8,
+    #[serde(default)]
+    pub guard_turns: u8,
+    #[serde(default)]
+    pub captured: bool,
     pub message: String,
     pub pending_enemy_damage: Option<u16>,
 }
 
 impl BattleState {
-    pub fn new(enemy_name: String, enemy_level: u8, player_hp_max: u16, player_hp: u16) -> Self {
+    pub fn new(
+        enemy_name: String,
+        enemy_level: u8,
+        player_hp_max: u16,
+        player_hp: u16,
+        kind: BattleKind,
+    ) -> Self {
         Self {
             stage: BattleStage::Intro,
+            kind,
             enemy_name,
             enemy_level,
             player_hp: player_hp.min(player_hp_max),
@@ -299,18 +341,65 @@ impl BattleState {
             enemy_hp_max: 1,
             menu_index: 0,
             item_index: 0,
+            combo_hits: Vec::new(),
+            guard_pct: 0,
+            guard_turns: 0,
+            captured: false,
             message: "A wild Pokemon appeared!".to_string(),
             pending_enemy_damage: None,
         }
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub enum TurnActor {
+    Player { member_index: usize },
+    Enemy,
+}
+
+impl Default for TurnActor {
+    fn default() -> Self {
+        TurnActor::Player { member_index: 0 }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ComboHit {
+    #[serde(default)]
+    pub actor: TurnActor,
+    pub name: String,
+    pub damage: u16,
+    #[serde(default)]
+    pub ability_name: Option<String>,
+    #[serde(default)]
+    pub ability_damage: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct Pickup {
+    pub x: u16,
+    pub y: u16,
+    pub kind: ItemKind,
+    pub qty: u16,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AppState {
     pub terminal_size: (u16, u16),
     pub mode: GameMode,
     pub map: MapState,
     pub player: PlayerState,
+    #[serde(default)]
+    pub scenario: Option<ScenarioRuntime>,
+    #[serde(default = "default_scenario_dir")]
+    pub scenario_dir: String,
+    #[serde(default)]
+    pub party: Vec<PartyMember>,
+    #[serde(default)]
+    pub party_sprites: Vec<SpriteState>,
+    #[serde(default)]
+    pub active_party_index: usize,
+    // Legacy fields for save migration
     pub player_info: Option<PokemonInfo>,
     #[serde(default = "default_player_level")]
     pub player_level: u8,
@@ -320,6 +409,22 @@ pub struct AppState {
     pub player_hp: u16,
     #[serde(default = "default_inventory")]
     pub inventory: Vec<ItemStack>,
+    #[serde(default)]
+    pub message_queue: VecDeque<String>,
+    #[serde(default)]
+    pub message_timer: u16,
+    #[serde(default)]
+    pub wild_wins: u16,
+    #[serde(default)]
+    pub has_relic: bool,
+    #[serde(default)]
+    pub boss_defeated: bool,
+    #[serde(default)]
+    pub fired_event_ids: HashSet<String>,
+    #[serde(default)]
+    pub defeat_counts: HashMap<String, u16>,
+    #[serde(default)]
+    pub pickups: Vec<Pickup>,
     pub enemy_info: Option<PokemonInfo>,
     pub player_sprite: SpriteState,
     pub enemy_sprite: SpriteState,
@@ -348,11 +453,24 @@ impl AppState {
             mode: GameMode::MainMenu,
             map,
             player: PlayerState::new(start_x, start_y),
+            scenario: None,
+            scenario_dir: default_scenario_dir(),
+            party: Vec::new(),
+            party_sprites: Vec::new(),
+            active_party_index: 0,
             player_info: None,
             player_level: default_player_level(),
             player_exp: default_player_exp(),
             player_hp: default_player_hp(),
             inventory: default_inventory(),
+            message_queue: VecDeque::new(),
+            message_timer: 0,
+            wild_wins: 0,
+            has_relic: false,
+            boss_defeated: false,
+            fired_event_ids: HashSet::new(),
+            defeat_counts: HashMap::new(),
+            pickups: Vec::new(),
             enemy_info: None,
             player_sprite: SpriteState::default(),
             enemy_sprite: SpriteState::default(),
@@ -371,31 +489,61 @@ impl AppState {
     }
 
     pub fn player_name(&self) -> String {
-        self.player_info
-            .as_ref()
-            .map(|info| info.name.clone())
+        self.active_member()
+            .map(|member| member.info.name.clone())
+            .or_else(|| self.player_info.as_ref().map(|info| info.name.clone()))
             .unwrap_or_else(|| "partner".to_string())
     }
 
     pub fn player_max_hp(&self) -> u16 {
-        self.player_info
-            .as_ref()
-            .map(|info| calc_hp(info.hp, self.player_level))
+        self.active_member()
+            .map(|member| calc_hp(member.info.hp, member.level))
+            .or_else(|| {
+                self.player_info
+                    .as_ref()
+                    .map(|info| calc_hp(info.hp, self.player_level))
+            })
             .unwrap_or(35)
     }
 
     pub fn exp_to_next_level(&self) -> u32 {
-        if self.player_level >= MAX_LEVEL {
+        let level = self
+            .active_member()
+            .map(|m| m.level)
+            .unwrap_or(self.player_level);
+        if level >= MAX_LEVEL {
             return 0;
         }
-        let next = exp_for_level(self.player_level.saturating_add(1));
-        let current = exp_for_level(self.player_level);
+        let next = exp_for_level(level.saturating_add(1));
+        let current = exp_for_level(level);
         next.saturating_sub(current)
     }
 
     pub fn exp_progress(&self) -> u32 {
-        let current = exp_for_level(self.player_level);
-        self.player_exp.saturating_sub(current)
+        let level = self
+            .active_member()
+            .map(|m| m.level)
+            .unwrap_or(self.player_level);
+        let exp = self
+            .active_member()
+            .map(|m| m.exp)
+            .unwrap_or(self.player_exp);
+        let current = exp_for_level(level);
+        exp.saturating_sub(current)
+    }
+
+    pub fn active_member(&self) -> Option<&PartyMember> {
+        self.party.get(self.active_party_index)
+    }
+
+    pub fn active_member_mut(&mut self) -> Option<&mut PartyMember> {
+        self.party.get_mut(self.active_party_index)
+    }
+
+    pub fn active_level(&self) -> u8 {
+        self.active_member()
+            .map(|member| member.level)
+            .unwrap_or(self.player_level)
     }
 }
 
@@ -454,6 +602,10 @@ fn default_base_experience() -> u16 {
     60
 }
 
+fn default_battle_kind() -> BattleKind {
+    BattleKind::Wild
+}
+
 fn default_enemy_level() -> u8 {
     5
 }
@@ -470,6 +622,10 @@ fn default_player_hp() -> u16 {
     0
 }
 
+fn default_scenario_dir() -> String {
+    "assets/scenarios/lakeside".to_string()
+}
+
 fn default_inventory() -> Vec<ItemStack> {
     vec![
         ItemStack {
@@ -479,6 +635,10 @@ fn default_inventory() -> Vec<ItemStack> {
         ItemStack {
             kind: ItemKind::SuperPotion,
             qty: 1,
+        },
+        ItemStack {
+            kind: ItemKind::PokeBall,
+            qty: 5,
         },
     ]
 }
