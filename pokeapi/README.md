@@ -2,6 +2,12 @@
 
 A terminal user interface for browsing Pokemon data from the PokeAPI, built with Rust using the tui-dispatch framework.
 
+<img src="../assets/screens/pokeapi.png" width="800" alt="PokeAPI TUI">
+
+_This is a creative sketch only, not ready for use._
+
+---
+
 ## Features
 
 - Multi-region Pokedex list of base forms with search and type filters
