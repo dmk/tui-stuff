@@ -1,0 +1,47 @@
+id: "starter"
+name: "Green Hollow"
+map_path: "map.txt"
+legend:
+  - ch: "#"
+    tile: "wall"
+  - ch: "g"
+    tile: "grass"
+  - ch: "r"
+    tile: "road"
+  - ch: "."
+    tile: "floor"
+player_start:
+  x: 3
+  y: 3
+npcs:
+  - id: "mara"
+    name: "Mara"
+    x: 8
+    y: 4
+    persona: "Warm but guarded, a village scout who trusts actions more than words."
+    dialogue_prompt: "Knows rumors about the old mill and the goblin path."
+items:
+  - id: "torch"
+    name: "Torch"
+    x: 6
+    y: 5
+    qty: 1
+encounters:
+  - id: "goblin"
+    name: "Goblin"
+    x: 14
+    y: 5
+    hp: 7
+    atk: 2
+triggers:
+  - kind: "on_enter"
+    x: 5
+    y: 9
+    message: "Cold fog rolls in from the treeline."
+  - kind: "on_interact"
+    x: 6
+    y: 5
+    message: "You find a torch tucked into the grass."
+lore:
+  - "Green Hollow is a farming village on the edge of the mistwood."
+  - "Travelers warn of goblins using the old mill road at night."
