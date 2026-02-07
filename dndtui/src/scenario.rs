@@ -1,9 +1,10 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::Path;
+use tui_map::core::TileKind;
+use tui_map::parse::{parse_char_grid, Legend, ParseOptions, TrimMode};
 
-use crate::state::{EncounterState, ItemState, MapState, NpcState, Tile, Trigger};
+use crate::state::{EncounterState, ItemState, MapState, NpcState, Trigger};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ScenarioRuntime {
@@ -164,34 +165,23 @@ pub async fn load_scenario(path: &Path) -> Result<ScenarioRuntime, String> {
 
 fn parse_map(manifest: &ScenarioManifest, map_str: &str) -> Result<MapState, String> {
     let legend = build_legend(&manifest.legend)?;
-    let lines: Vec<&str> = map_str
-        .lines()
-        .map(|l| l.trim_end())
-        .filter(|l| !l.trim().is_empty())
-        .collect();
-    let height = lines.len();
-    let width = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+    let grid = parse_char_grid(
+        &manifest.name,
+        map_str,
+        &legend,
+        &ParseOptions {
+            trim_mode: TrimMode::PreserveRightWhitespace,
+            default_char: ' ',
+            default_tile: TileKind::Floor,
+        },
+    )
+    .map_err(|e| format!("Failed to parse map: {}", e))?;
 
-    let mut tiles = Vec::with_capacity(width * height);
-    for line in &lines {
-        let chars: Vec<char> = line.chars().collect();
-        for x in 0..width {
-            let ch = chars.get(x).copied().unwrap_or(' ');
-            let tile = legend.get(&ch).copied().unwrap_or(Tile::Floor);
-            tiles.push(tile);
-        }
-    }
-
-    Ok(MapState {
-        name: manifest.name.clone(),
-        width: width as u16,
-        height: height as u16,
-        tiles,
-    })
+    Ok(MapState::from_grid(grid))
 }
 
-fn build_legend(entries: &[LegendEntry]) -> Result<HashMap<char, Tile>, String> {
-    let mut legend = HashMap::new();
+fn build_legend(entries: &[LegendEntry]) -> Result<Legend, String> {
+    let mut legend = Legend::builder();
     for entry in entries {
         let ch = entry
             .ch
@@ -200,18 +190,20 @@ fn build_legend(entries: &[LegendEntry]) -> Result<HashMap<char, Tile>, String> 
             .ok_or_else(|| "Legend entry missing character".to_string())?;
         let tile =
             tile_from_name(&entry.tile).ok_or_else(|| format!("Unknown tile: {}", entry.tile))?;
-        legend.insert(ch, tile);
+        legend = legend.entry(ch, tile);
     }
-    Ok(legend)
+    legend
+        .build()
+        .map_err(|e| format!("Failed to build map legend: {}", e))
 }
 
-fn tile_from_name(name: &str) -> Option<Tile> {
+fn tile_from_name(name: &str) -> Option<TileKind> {
     match name.to_lowercase().as_str() {
-        "grass" => Some(Tile::Grass),
-        "road" => Some(Tile::Road),
-        "floor" => Some(Tile::Floor),
-        "wall" => Some(Tile::Wall),
-        "water" => Some(Tile::Water),
+        "grass" => Some(TileKind::Grass),
+        "road" => Some(TileKind::Trail),
+        "floor" => Some(TileKind::Floor),
+        "wall" => Some(TileKind::Wall),
+        "water" => Some(TileKind::Water),
         _ => None,
     }
 }
@@ -227,6 +219,6 @@ mod tests {
             tile: "wall".to_string(),
         }];
         let legend = build_legend(&entries).expect("legend");
-        assert!(legend.contains_key(&'#'));
+        assert_eq!(legend.tile_for('#'), Some(TileKind::Wall));
     }
 }

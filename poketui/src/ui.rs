@@ -6,13 +6,16 @@ use ratatui::{
     widgets::{block::Title, Block, BorderType, Borders, Paragraph, Wrap},
     Frame,
 };
+use std::sync::OnceLock;
+use tui_map::core::TileKind;
+use tui_map::render::{Camera, MapRenderer, RenderConfig, TextureVariant, TilePalette, TileTheme};
 use tui_dispatch::{EventKind, EventOutcome, RenderContext};
 
 use crate::action::Action;
 use crate::sprite;
 use crate::sprite_backend;
 use crate::state::{
-    calc_hp, AppState, BattleKind, BattleStage, Direction as MoveDir, GameMode, Tile,
+    calc_hp, AppState, BattleKind, BattleStage, Direction as MoveDir, GameMode,
 };
 
 const BG_BASE: Color = Color::Rgb(24, 36, 26);
@@ -44,16 +47,7 @@ const TILE_WALL: Color = Color::Rgb(66, 74, 66);
 const TILE_WALL_ALT: Color = Color::Rgb(60, 68, 60);
 const TILE_WATER: Color = Color::Rgb(48, 86, 146);
 const TILE_WATER_ALT: Color = Color::Rgb(52, 92, 150);
-
-fn tile_colors(tile: Tile) -> (Color, Color) {
-    match tile {
-        Tile::Grass => (TILE_GRASS, TILE_GRASS_ALT),
-        Tile::Path => (TILE_PATH, TILE_PATH_ALT),
-        Tile::Sand => (TILE_SAND, TILE_SAND_ALT),
-        Tile::Wall => (TILE_WALL, TILE_WALL_ALT),
-        Tile::Water => (TILE_WATER, TILE_WATER_ALT),
-    }
-}
+static MAP_RENDERER: OnceLock<MapRenderer> = OnceLock::new();
 
 fn adjust_color(color: Color, delta: i16) -> Color {
     match color {
@@ -69,57 +63,74 @@ fn adjust_color(color: Color, delta: i16) -> Color {
     }
 }
 
-fn tile_seed(x: u16, y: u16) -> u32 {
-    let mut n = x as u32;
-    n = n
-        .wrapping_mul(374761393)
-        .wrapping_add((y as u32).wrapping_mul(668265263));
-    n ^= n >> 13;
-    n = n.wrapping_mul(1274126177);
-    n ^= n >> 16;
-    n
+fn poketui_map_theme() -> TileTheme {
+    let grass = TilePalette::new(
+        TILE_GRASS,
+        TILE_GRASS_ALT,
+        [
+            TextureVariant::new('.', adjust_color(TILE_GRASS, 10), 6),
+            TextureVariant::new('\'', adjust_color(TILE_GRASS, 6), 7),
+            TextureVariant::new('`', adjust_color(TILE_GRASS, -4), 8),
+        ],
+    );
+    let trail = TilePalette::new(
+        TILE_PATH,
+        TILE_PATH_ALT,
+        [
+            TextureVariant::new('.', adjust_color(TILE_PATH, 6), 6),
+            TextureVariant::new(':', adjust_color(TILE_PATH, 4), 7),
+            TextureVariant::new('\'', adjust_color(TILE_PATH, -4), 8),
+        ],
+    );
+    let sand = TilePalette::new(
+        TILE_SAND,
+        TILE_SAND_ALT,
+        [
+            TextureVariant::new(':', adjust_color(TILE_SAND, 8), 6),
+            TextureVariant::new('.', adjust_color(TILE_SAND, 4), 7),
+            TextureVariant::new(',', adjust_color(TILE_SAND, -4), 8),
+        ],
+    );
+    let wall = TilePalette::new(
+        TILE_WALL,
+        TILE_WALL_ALT,
+        [
+            TextureVariant::new('#', adjust_color(TILE_WALL, 10), 8),
+            TextureVariant::new('+', adjust_color(TILE_WALL, 6), 9),
+            TextureVariant::new('.', adjust_color(TILE_WALL, 4), 10),
+        ],
+    );
+    let water = TilePalette::new(
+        TILE_WATER,
+        TILE_WATER_ALT,
+        [
+            TextureVariant::new('~', adjust_color(TILE_WATER, 10), 8),
+            TextureVariant::new('-', adjust_color(TILE_WATER, 6), 9),
+            TextureVariant::new('.', adjust_color(TILE_WATER, 4), 10),
+        ],
+    );
+
+    TileTheme::builder()
+        .fallback(grass)
+        .tile(TileKind::Grass, grass)
+        .tile(TileKind::Trail, trail)
+        .tile(TileKind::Floor, trail)
+        .tile(TileKind::Sand, sand)
+        .tile(TileKind::Wall, wall)
+        .tile(TileKind::Water, water)
+        .build()
 }
 
-fn cell_seed(x: u16, y: u16, dx: u16, dy: u16) -> u32 {
-    let mut n = tile_seed(x, y);
-    n ^= (dx as u32).wrapping_mul(2246822519);
-    n ^= (dy as u32).wrapping_mul(3266489917);
-    n ^= n >> 15;
-    n = n.wrapping_mul(668265263);
-    n ^= n >> 13;
-    n
-}
-
-fn tile_texture(tile: Tile, map_x: u16, map_y: u16) -> (char, Color, u8) {
-    let seed = tile_seed(map_x, map_y);
-    let variant = (seed % 3) as u8;
-    match tile {
-        Tile::Grass => match variant {
-            0 => ('.', adjust_color(TILE_GRASS, 10), 6),
-            1 => ('\'', adjust_color(TILE_GRASS, 6), 7),
-            _ => ('`', adjust_color(TILE_GRASS, -4), 8),
-        },
-        Tile::Sand => match variant {
-            0 => (':', adjust_color(TILE_SAND, 8), 6),
-            1 => ('.', adjust_color(TILE_SAND, 4), 7),
-            _ => (',', adjust_color(TILE_SAND, -4), 8),
-        },
-        Tile::Path => match variant {
-            0 => ('.', adjust_color(TILE_PATH, 6), 6),
-            1 => (':', adjust_color(TILE_PATH, 4), 7),
-            _ => ('\'', adjust_color(TILE_PATH, -4), 8),
-        },
-        Tile::Wall => match variant {
-            0 => ('#', adjust_color(TILE_WALL, 10), 8),
-            1 => ('+', adjust_color(TILE_WALL, 6), 9),
-            _ => ('.', adjust_color(TILE_WALL, 4), 10),
-        },
-        Tile::Water => match variant {
-            0 => ('~', adjust_color(TILE_WATER, 10), 8),
-            1 => ('-', adjust_color(TILE_WATER, 6), 9),
-            _ => ('.', adjust_color(TILE_WATER, 4), 10),
-        },
-    }
+fn map_renderer() -> &'static MapRenderer {
+    MAP_RENDERER.get_or_init(|| {
+        MapRenderer::builder()
+            .config(RenderConfig {
+                map_tiles_vertical_hint: MAP_TILES_V,
+                cell_aspect: CELL_ASPECT,
+            })
+            .theme(poketui_map_theme())
+            .build()
+    })
 }
 
 const SPRITE_ID_STARTER_PREVIEW: u32 = 5;
@@ -803,88 +814,32 @@ fn render_map(frame: &mut Frame, area: Rect, state: &AppState) {
         return;
     }
 
-    // Each tile spans multiple terminal cells for a zoomed-in view
-    let rows_per_tile = (inner.height / MAP_TILES_V).max(2);
-    let cols_per_tile = ((rows_per_tile as f32 * CELL_ASPECT).round() as u16).max(2);
-
-    let view_tiles_h = (inner.width / cols_per_tile).min(state.map.width);
-    let view_tiles_v = (inner.height / rows_per_tile).min(state.map.height);
-    if view_tiles_h == 0 || view_tiles_v == 0 {
+    let render = map_renderer().render_base(
+        frame,
+        inner,
+        &state.map,
+        Camera {
+            focus_x: state.player.x,
+            focus_y: state.player.y,
+        },
+        true,
+    );
+    if render.view_tiles_h == 0 || render.view_tiles_v == 0 {
         return;
     }
 
-    let used_cols = view_tiles_h * cols_per_tile;
-    let used_rows = view_tiles_v * rows_per_tile;
-    let pad_x = (inner.width.saturating_sub(used_cols)) / 2;
-    let pad_y = (inner.height.saturating_sub(used_rows)) / 2;
-    let origin_x = inner.x + pad_x;
-    let origin_y = inner.y + pad_y;
-
-    let (start_x, start_y) = map_viewport(state, view_tiles_h, view_tiles_v);
     let buf = frame.buffer_mut();
-
-    // Draw tiles
-    for tile_row in 0..view_tiles_v {
-        for tile_col in 0..view_tiles_h {
-            let map_x = start_x + tile_col;
-            let map_y = start_y + tile_row;
-            let tile = state.map.tile(map_x, map_y);
-            let (color_main, color_alt) = tile_colors(tile);
-            let seed = tile_seed(map_x, map_y);
-            let bg = if seed % 2 == 0 { color_main } else { color_alt };
-            let (tex_char, tex_color, density) = tile_texture(tile, map_x, map_y);
-
-            let cell_x = origin_x + tile_col * cols_per_tile;
-            let cell_y = origin_y + tile_row * rows_per_tile;
-
-            // Draw the tile interior with subtle pattern
-            for dy in 0..rows_per_tile {
-                for dx in 0..cols_per_tile {
-                    let x = cell_x + dx;
-                    let y = cell_y + dy;
-                    if let Some(cell) = buf.cell_mut((x, y)) {
-                        let sprinkle = cell_seed(map_x, map_y, dx, dy);
-                        if sprinkle % density as u32 == 0 {
-                            cell.set_bg(bg).set_fg(tex_color).set_char(tex_char);
-                        } else {
-                            cell.set_bg(bg).set_fg(bg).set_char(' ');
-                        }
-                    }
-                }
+    for pickup in &state.pickups {
+        if pickup.x == state.player.x && pickup.y == state.player.y {
+            continue;
+        }
+        if let Some((center_x, center_y)) = render.marker_cell(pickup.x, pickup.y) {
+            if let Some(cell) = buf.cell_mut((center_x, center_y)) {
+                cell.set_fg(ACCENT_GOLD).set_char('*');
             }
         }
     }
 
-    // Draw pickups
-    for pickup in &state.pickups {
-        let map_x = pickup.x;
-        let map_y = pickup.y;
-        if map_x < start_x
-            || map_y < start_y
-            || map_x >= start_x + view_tiles_h
-            || map_y >= start_y + view_tiles_v
-        {
-            continue;
-        }
-        if map_x == state.player.x && map_y == state.player.y {
-            continue;
-        }
-        let tile = state.map.tile(map_x, map_y);
-        let (color_main, color_alt) = tile_colors(tile);
-        let seed = tile_seed(map_x, map_y);
-        let bg = if seed % 2 == 0 { color_main } else { color_alt };
-        let tile_col = map_x - start_x;
-        let tile_row = map_y - start_y;
-        let cell_x = origin_x + tile_col * cols_per_tile;
-        let cell_y = origin_y + tile_row * rows_per_tile;
-        let center_x = cell_x + cols_per_tile / 2;
-        let center_y = cell_y + rows_per_tile / 2;
-        if let Some(cell) = buf.cell_mut((center_x, center_y)) {
-            cell.set_bg(bg).set_fg(ACCENT_GOLD).set_char('*');
-        }
-    }
-
-    // Draw player sprite on top
     let player_sprite = match state.player.facing {
         MoveDir::Right => state
             .player_sprite
@@ -894,18 +849,13 @@ fn render_map(frame: &mut Frame, area: Rect, state: &AppState) {
         _ => state.player_sprite.sprite.as_ref(),
     };
     if let Some(sprite) = player_sprite {
-        let player_col = state.player.x.saturating_sub(start_x);
-        let player_row = state.player.y.saturating_sub(start_y);
-        if player_col < view_tiles_h && player_row < view_tiles_v {
-            let (cols, rows) = sprite_fit(sprite, cols_per_tile, rows_per_tile);
+        if let Some((tile_x, tile_y)) = render.tile_cell_origin(state.player.x, state.player.y) {
+            let (cols, rows) = sprite_fit(sprite, render.cols_per_tile, render.rows_per_tile);
             let sprite_frame = sprite.frame(state.player_sprite.frame_index);
-            if let Ok(sequence) =
-                sprite::kitty_sequence(sprite_frame, cols, rows, SPRITE_ID_PLAYER_MAP)
+            if let Ok(sequence) = sprite::kitty_sequence(sprite_frame, cols, rows, SPRITE_ID_PLAYER_MAP)
             {
-                let tile_x = origin_x + player_col * cols_per_tile;
-                let tile_y = origin_y + player_row * rows_per_tile;
-                let offset_x = tile_x + cols_per_tile.saturating_sub(cols) / 2;
-                let offset_y = tile_y + rows_per_tile.saturating_sub(rows) / 2;
+                let offset_x = tile_x + render.cols_per_tile.saturating_sub(cols) / 2;
+                let offset_y = tile_y + render.rows_per_tile.saturating_sub(rows) / 2;
                 sprite_backend::set_sprite(SPRITE_ID_PLAYER_MAP, offset_x, offset_y, sequence);
             }
         }
@@ -1282,22 +1232,6 @@ fn battle_menu_lines(selected: usize, kind: BattleKind) -> Vec<Line<'static>> {
 
 fn battle_should_show_modal(battle: &crate::state::BattleState) -> bool {
     !matches!(battle.stage, BattleStage::Menu | BattleStage::ItemMenu)
-}
-
-fn map_viewport(state: &AppState, view_cols: u16, view_rows: u16) -> (u16, u16) {
-    let half_cols = view_cols / 2;
-    let half_rows = view_rows / 2;
-    let max_x = state.map.width.saturating_sub(view_cols);
-    let max_y = state.map.height.saturating_sub(view_rows);
-    let mut start_x = state.player.x.saturating_sub(half_cols);
-    let mut start_y = state.player.y.saturating_sub(half_rows);
-    if start_x > max_x {
-        start_x = max_x;
-    }
-    if start_y > max_y {
-        start_y = max_y;
-    }
-    (start_x, start_y)
 }
 
 fn hp_line_scaled(current: u16, max: u16, width: usize) -> Line<'static> {

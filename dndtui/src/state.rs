@@ -2,6 +2,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tui_map::core::{MapGrid, MapRead, MapSize, TileKind};
 use tui_dispatch_debug::debug::{DebugSection, DebugState};
 
 use crate::llm::Provider;
@@ -35,6 +36,30 @@ pub enum Tile {
     Water,
 }
 
+impl Tile {
+    pub fn to_tile_kind(self) -> TileKind {
+        match self {
+            Tile::Grass => TileKind::Grass,
+            Tile::Road => TileKind::Trail,
+            Tile::Floor => TileKind::Floor,
+            Tile::Wall => TileKind::Wall,
+            Tile::Water => TileKind::Water,
+        }
+    }
+
+    pub fn from_tile_kind(kind: TileKind) -> Self {
+        match kind {
+            TileKind::Grass => Tile::Grass,
+            TileKind::Trail => Tile::Road,
+            TileKind::Sand => Tile::Floor,
+            TileKind::Floor => Tile::Floor,
+            TileKind::Wall => Tile::Wall,
+            TileKind::Water => Tile::Water,
+            TileKind::Custom(_) => Tile::Floor,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct MapState {
     pub name: String,
@@ -44,6 +69,15 @@ pub struct MapState {
 }
 
 impl MapState {
+    pub fn from_grid(grid: MapGrid) -> Self {
+        Self {
+            name: grid.name,
+            width: grid.size.width,
+            height: grid.size.height,
+            tiles: grid.tiles.into_iter().map(Tile::from_tile_kind).collect(),
+        }
+    }
+
     pub fn tile(&self, x: u16, y: u16) -> Tile {
         if x >= self.width || y >= self.height {
             return Tile::Wall;
@@ -58,6 +92,16 @@ impl MapState {
 
     fn index(&self, x: u16, y: u16) -> usize {
         (y as usize * self.width as usize) + x as usize
+    }
+}
+
+impl MapRead for MapState {
+    fn map_size(&self) -> MapSize {
+        MapSize::new(self.width, self.height)
+    }
+
+    fn tile_kind(&self, x: u16, y: u16) -> TileKind {
+        self.tile(x, y).to_tile_kind()
     }
 }
 

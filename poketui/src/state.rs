@@ -1,6 +1,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
+use tui_map::core::{MapGrid, MapRead, MapSize, TileKind};
 use tui_dispatch_debug::debug::{ron_string, DebugSection, DebugState};
 
 use crate::scenario::ScenarioRuntime;
@@ -118,6 +119,30 @@ pub enum Tile {
     Water,
 }
 
+impl Tile {
+    pub fn to_tile_kind(self) -> TileKind {
+        match self {
+            Tile::Grass => TileKind::Grass,
+            Tile::Path => TileKind::Trail,
+            Tile::Sand => TileKind::Sand,
+            Tile::Wall => TileKind::Wall,
+            Tile::Water => TileKind::Water,
+        }
+    }
+
+    pub fn from_tile_kind(kind: TileKind) -> Self {
+        match kind {
+            TileKind::Grass => Tile::Grass,
+            TileKind::Trail => Tile::Path,
+            TileKind::Sand => Tile::Sand,
+            TileKind::Floor => Tile::Path,
+            TileKind::Wall => Tile::Wall,
+            TileKind::Water => Tile::Water,
+            TileKind::Custom(_) => Tile::Grass,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct MapState {
     pub name: String,
@@ -186,6 +211,15 @@ impl MapState {
         }
     }
 
+    pub fn from_grid(grid: MapGrid) -> Self {
+        Self {
+            name: grid.name,
+            width: grid.size.width,
+            height: grid.size.height,
+            tiles: grid.tiles.into_iter().map(Tile::from_tile_kind).collect(),
+        }
+    }
+
     fn char_to_tile(ch: char) -> Tile {
         match ch {
             'g' | 'G' => Tile::Grass,
@@ -227,6 +261,16 @@ impl MapState {
 
     fn index(&self, x: u16, y: u16) -> usize {
         (y as usize * self.width as usize) + x as usize
+    }
+}
+
+impl MapRead for MapState {
+    fn map_size(&self) -> MapSize {
+        MapSize::new(self.width, self.height)
+    }
+
+    fn tile_kind(&self, x: u16, y: u16) -> TileKind {
+        self.tile(x, y).to_tile_kind()
     }
 }
 

@@ -1,6 +1,8 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use tui_map::core::TileKind;
+use tui_map::parse::{parse_char_grid, Legend, ParseOptions, TrimMode};
 
 use crate::state::{ItemKind, MapState};
 
@@ -101,7 +103,34 @@ pub async fn load_scenario(path: &Path) -> Result<ScenarioRuntime, String> {
     let map_str = tokio::fs::read_to_string(&map_path)
         .await
         .map_err(|e| format!("Failed to read {}: {}", map_path.display(), e))?;
-    let map = MapState::from_str(&manifest.name, &map_str);
+    let legend = Legend::builder()
+        .entry('g', TileKind::Grass)
+        .entry('G', TileKind::Grass)
+        .entry('r', TileKind::Trail)
+        .entry('R', TileKind::Trail)
+        .entry('p', TileKind::Trail)
+        .entry('P', TileKind::Trail)
+        .entry('s', TileKind::Sand)
+        .entry('S', TileKind::Sand)
+        .entry('w', TileKind::Water)
+        .entry('W', TileKind::Water)
+        .entry('#', TileKind::Wall)
+        .entry('x', TileKind::Wall)
+        .entry('X', TileKind::Wall)
+        .build()
+        .map_err(|e| format!("Failed to build map legend: {}", e))?;
+    let grid = parse_char_grid(
+        &manifest.name,
+        &map_str,
+        &legend,
+        &ParseOptions {
+            trim_mode: TrimMode::TrimBoth,
+            default_char: 'g',
+            default_tile: TileKind::Grass,
+        },
+    )
+    .map_err(|e| format!("Failed to parse map: {}", e))?;
+    let map = MapState::from_grid(grid);
     Ok(ScenarioRuntime { manifest, map })
 }
 

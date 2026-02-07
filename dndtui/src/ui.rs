@@ -6,6 +6,9 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Paragraph, Wrap},
     Frame,
 };
+use std::sync::OnceLock;
+use tui_map::core::TileKind;
+use tui_map::render::{Camera, MapRenderResult, MapRenderer, RenderConfig, TextureVariant, TilePalette, TileTheme};
 use tui_dispatch::{Component, EventKind, EventOutcome, RenderContext};
 use tui_dispatch_components::{
     centered_rect, BaseStyle, BorderStyle, Line as CLine, LinesScroller, Modal, ModalBehavior,
@@ -21,7 +24,7 @@ use crate::rules::{BACKGROUND_OPTIONS, CLASS_OPTIONS};
 use crate::sprite;
 use crate::sprite_backend;
 use crate::state::{
-    AppState, CreationStep, Direction as MoveDir, GameMode, LogSpeaker, MenuState, Tile,
+    AppState, CreationStep, Direction as MoveDir, GameMode, LogSpeaker, MenuState,
 };
 
 const BG_BASE: Color = Color::Rgb(16, 18, 20);
@@ -38,6 +41,7 @@ const SPRITE_ID_PLAYER: u32 = 0x1000_0001;
 const SPRITE_ID_NPC_PREFIX: u32 = 0x2000_0000;
 const SPRITE_ID_ITEM_PREFIX: u32 = 0x3000_0000;
 const SPRITE_ID_ENCOUNTER_PREFIX: u32 = 0x4000_0000;
+static MAP_RENDERER: OnceLock<MapRenderer> = OnceLock::new();
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PaneFocus {
@@ -1431,57 +1435,24 @@ fn render_map(frame: &mut Frame, area: Rect, state: &AppState, is_focused: bool)
         return;
     }
 
-    let rows_per_tile = (inner.height / MAP_TILES_V).max(2);
-    let cols_per_tile = ((rows_per_tile as f32 * CELL_ASPECT).round() as u16).max(2);
-
-    let view_tiles_h = (inner.width / cols_per_tile).min(state.map.width);
-    let view_tiles_v = (inner.height / rows_per_tile).min(state.map.height);
-    if view_tiles_h == 0 || view_tiles_v == 0 {
+    let (player_x, player_y) = state.player_pos();
+    let render = map_renderer().render_base(
+        frame,
+        inner,
+        &state.map,
+        Camera {
+            focus_x: player_x,
+            focus_y: player_y,
+        },
+        is_focused,
+    );
+    if render.view_tiles_h == 0 || render.view_tiles_v == 0 {
         return;
     }
 
-    let used_cols = view_tiles_h * cols_per_tile;
-    let used_rows = view_tiles_v * rows_per_tile;
-    let pad_x = (inner.width.saturating_sub(used_cols)) / 2;
-    let pad_y = (inner.height.saturating_sub(used_rows)) / 2;
-    let origin_x = inner.x + pad_x;
-    let origin_y = inner.y + pad_y;
-
-    let (start_x, start_y) = map_viewport(state, view_tiles_h, view_tiles_v);
     let buf = frame.buffer_mut();
     let icons = icons::icon_set();
-    let use_icons = cols_per_tile >= 3 && rows_per_tile >= 2;
-    let (player_x, player_y) = state.player_pos();
-
-    for tile_row in 0..view_tiles_v {
-        for tile_col in 0..view_tiles_h {
-            let map_x = start_x + tile_col;
-            let map_y = start_y + tile_row;
-            let tile = state.map.tile(map_x, map_y);
-            let (color_main, color_alt) = tile_colors(tile);
-            let seed = tile_seed(map_x, map_y);
-            let bg = if seed % 2 == 0 { color_main } else { color_alt };
-            let (tex_char, tex_color, density) = tile_texture(tile, map_x, map_y);
-
-            let cell_x = origin_x + tile_col * cols_per_tile;
-            let cell_y = origin_y + tile_row * rows_per_tile;
-
-            for dy in 0..rows_per_tile {
-                for dx in 0..cols_per_tile {
-                    let x = cell_x + dx;
-                    let y = cell_y + dy;
-                    if let Some(cell) = buf.cell_mut((x, y)) {
-                        let sprinkle = cell_seed(map_x, map_y, dx, dy);
-                        if sprinkle % density as u32 == 0 {
-                            cell.set_bg(bg).set_fg(tex_color).set_char(tex_char);
-                        } else {
-                            cell.set_bg(bg).set_fg(bg).set_char(' ');
-                        }
-                    }
-                }
-            }
-        }
-    }
+    let use_icons = render.cols_per_tile >= 3 && render.rows_per_tile >= 2;
 
     if let Some(icon) = icons.item.as_ref().filter(|_| use_icons) {
         for item in &state.items {
@@ -1493,33 +1464,12 @@ fn render_map(frame: &mut Frame, area: Rect, state: &AppState, is_focused: bool)
                 sprite_id(SPRITE_ID_ITEM_PREFIX, &item.id),
                 item.x,
                 item.y,
-                start_x,
-                start_y,
-                view_tiles_h,
-                view_tiles_v,
-                origin_x,
-                origin_y,
-                cols_per_tile,
-                rows_per_tile,
+                render,
             );
         }
     } else {
         for item in &state.items {
-            draw_marker(
-                buf,
-                item.x,
-                item.y,
-                start_x,
-                start_y,
-                view_tiles_h,
-                view_tiles_v,
-                origin_x,
-                origin_y,
-                cols_per_tile,
-                rows_per_tile,
-                '*',
-                ACCENT_GOLD,
-            );
+            draw_marker(buf, item.x, item.y, render, '*', ACCENT_GOLD);
         }
     }
 
@@ -1533,33 +1483,12 @@ fn render_map(frame: &mut Frame, area: Rect, state: &AppState, is_focused: bool)
                 sprite_id(SPRITE_ID_NPC_PREFIX, &npc.id),
                 npc.x,
                 npc.y,
-                start_x,
-                start_y,
-                view_tiles_h,
-                view_tiles_v,
-                origin_x,
-                origin_y,
-                cols_per_tile,
-                rows_per_tile,
+                render,
             );
         }
     } else {
         for npc in &state.npcs {
-            draw_marker(
-                buf,
-                npc.x,
-                npc.y,
-                start_x,
-                start_y,
-                view_tiles_h,
-                view_tiles_v,
-                origin_x,
-                origin_y,
-                cols_per_tile,
-                rows_per_tile,
-                'N',
-                ACCENT,
-            );
+            draw_marker(buf, npc.x, npc.y, render, 'N', ACCENT);
         }
     }
 
@@ -1576,14 +1505,7 @@ fn render_map(frame: &mut Frame, area: Rect, state: &AppState, is_focused: bool)
                 sprite_id(SPRITE_ID_ENCOUNTER_PREFIX, &encounter.id),
                 encounter.x,
                 encounter.y,
-                start_x,
-                start_y,
-                view_tiles_h,
-                view_tiles_v,
-                origin_x,
-                origin_y,
-                cols_per_tile,
-                rows_per_tile,
+                render,
             );
         }
     } else {
@@ -1591,21 +1513,7 @@ fn render_map(frame: &mut Frame, area: Rect, state: &AppState, is_focused: bool)
             if encounter.defeated {
                 continue;
             }
-            draw_marker(
-                buf,
-                encounter.x,
-                encounter.y,
-                start_x,
-                start_y,
-                view_tiles_h,
-                view_tiles_v,
-                origin_x,
-                origin_y,
-                cols_per_tile,
-                rows_per_tile,
-                'E',
-                ACCENT_RED,
-            );
+            draw_marker(buf, encounter.x, encounter.y, render, 'E', ACCENT_RED);
         }
     }
 
@@ -1615,31 +1523,10 @@ fn render_map(frame: &mut Frame, area: Rect, state: &AppState, is_focused: bool)
             SPRITE_ID_PLAYER,
             player_x,
             player_y,
-            start_x,
-            start_y,
-            view_tiles_h,
-            view_tiles_v,
-            origin_x,
-            origin_y,
-            cols_per_tile,
-            rows_per_tile,
+            render,
         );
     } else {
-        draw_marker(
-            buf,
-            player_x,
-            player_y,
-            start_x,
-            start_y,
-            view_tiles_h,
-            view_tiles_v,
-            origin_x,
-            origin_y,
-            cols_per_tile,
-            rows_per_tile,
-            '@',
-            TEXT_MAIN,
-        );
+        draw_marker(buf, player_x, player_y, render, '@', TEXT_MAIN);
     }
 }
 
@@ -1647,32 +1534,14 @@ fn draw_marker(
     buf: &mut ratatui::buffer::Buffer,
     map_x: u16,
     map_y: u16,
-    start_x: u16,
-    start_y: u16,
-    view_tiles_h: u16,
-    view_tiles_v: u16,
-    origin_x: u16,
-    origin_y: u16,
-    cols_per_tile: u16,
-    rows_per_tile: u16,
+    render: MapRenderResult,
     ch: char,
     fg: Color,
 ) {
-    if map_x < start_x
-        || map_y < start_y
-        || map_x >= start_x + view_tiles_h
-        || map_y >= start_y + view_tiles_v
-    {
-        return;
-    }
-    let tile_col = map_x - start_x;
-    let tile_row = map_y - start_y;
-    let cell_x = origin_x + tile_col * cols_per_tile;
-    let cell_y = origin_y + tile_row * rows_per_tile;
-    let center_x = cell_x + cols_per_tile / 2;
-    let center_y = cell_y + rows_per_tile / 2;
-    if let Some(cell) = buf.cell_mut((center_x, center_y)) {
-        cell.set_fg(fg).set_char(ch);
+    if let Some((center_x, center_y)) = render.marker_cell(map_x, map_y) {
+        if let Some(cell) = buf.cell_mut((center_x, center_y)) {
+            cell.set_fg(fg).set_char(ch);
+        }
     }
 }
 
@@ -1681,32 +1550,16 @@ fn draw_map_sprite(
     sprite_id: u32,
     map_x: u16,
     map_y: u16,
-    start_x: u16,
-    start_y: u16,
-    view_tiles_h: u16,
-    view_tiles_v: u16,
-    origin_x: u16,
-    origin_y: u16,
-    cols_per_tile: u16,
-    rows_per_tile: u16,
+    render: MapRenderResult,
 ) {
-    if map_x < start_x
-        || map_y < start_y
-        || map_x >= start_x + view_tiles_h
-        || map_y >= start_y + view_tiles_v
-    {
-        return;
-    }
-    let tile_col = map_x - start_x;
-    let tile_row = map_y - start_y;
-    let (cols, rows) = sprite_fit_scaled(sprite, cols_per_tile, rows_per_tile, 0.9);
-    let sprite_frame = sprite.frame(0);
-    if let Ok(sequence) = sprite::kitty_sequence(sprite_frame, cols, rows, sprite_id) {
-        let tile_x = origin_x + tile_col * cols_per_tile;
-        let tile_y = origin_y + tile_row * rows_per_tile;
-        let offset_x = tile_x + cols_per_tile.saturating_sub(cols) / 2;
-        let offset_y = tile_y + rows_per_tile.saturating_sub(rows) / 2;
-        sprite_backend::set_sprite(sprite_id, offset_x, offset_y, sequence);
+    if let Some((tile_x, tile_y)) = render.tile_cell_origin(map_x, map_y) {
+        let (cols, rows) = sprite_fit_scaled(sprite, render.cols_per_tile, render.rows_per_tile, 0.9);
+        let sprite_frame = sprite.frame(0);
+        if let Ok(sequence) = sprite::kitty_sequence(sprite_frame, cols, rows, sprite_id) {
+            let offset_x = tile_x + render.cols_per_tile.saturating_sub(cols) / 2;
+            let offset_y = tile_y + render.rows_per_tile.saturating_sub(rows) / 2;
+            sprite_backend::set_sprite(sprite_id, offset_x, offset_y, sequence);
+        }
     }
 }
 
@@ -2174,16 +2027,6 @@ fn render_inventory_modal(
     modal.render(frame, area, props);
 }
 
-fn tile_colors(tile: Tile) -> (Color, Color) {
-    match tile {
-        Tile::Grass => (Color::Rgb(34, 112, 58), Color::Rgb(38, 120, 64)),
-        Tile::Road => (Color::Rgb(156, 132, 76), Color::Rgb(150, 128, 74)),
-        Tile::Floor => (Color::Rgb(90, 90, 94), Color::Rgb(80, 80, 84)),
-        Tile::Wall => (Color::Rgb(66, 74, 66), Color::Rgb(60, 68, 60)),
-        Tile::Water => (Color::Rgb(48, 86, 146), Color::Rgb(52, 92, 150)),
-    }
-}
-
 fn adjust_color(color: Color, delta: i16) -> Color {
     match color {
         Color::Rgb(r, g, b) => {
@@ -2196,6 +2039,87 @@ fn adjust_color(color: Color, delta: i16) -> Color {
         }
         other => other,
     }
+}
+
+fn dnd_map_theme() -> TileTheme {
+    let grass_base = Color::Rgb(34, 112, 58);
+    let grass_alt = Color::Rgb(38, 120, 64);
+    let trail_base = Color::Rgb(156, 132, 76);
+    let trail_alt = Color::Rgb(150, 128, 74);
+    let floor_base = Color::Rgb(90, 90, 94);
+    let floor_alt = Color::Rgb(80, 80, 84);
+    let wall_base = Color::Rgb(66, 74, 66);
+    let wall_alt = Color::Rgb(60, 68, 60);
+    let water_base = Color::Rgb(48, 86, 146);
+    let water_alt = Color::Rgb(52, 92, 150);
+
+    let grass = TilePalette::new(
+        grass_base,
+        grass_alt,
+        [
+            TextureVariant::new('.', adjust_color(grass_base, 10), 6),
+            TextureVariant::new('\'', adjust_color(grass_base, 6), 7),
+            TextureVariant::new('`', adjust_color(grass_base, -4), 8),
+        ],
+    );
+    let trail = TilePalette::new(
+        trail_base,
+        trail_alt,
+        [
+            TextureVariant::new('.', adjust_color(trail_base, 6), 6),
+            TextureVariant::new(':', adjust_color(trail_base, 4), 7),
+            TextureVariant::new('\'', adjust_color(trail_base, -4), 8),
+        ],
+    );
+    let floor = TilePalette::new(
+        floor_base,
+        floor_alt,
+        [
+            TextureVariant::new('.', adjust_color(floor_base, 6), 6),
+            TextureVariant::new(':', adjust_color(floor_base, 4), 7),
+            TextureVariant::new('\'', adjust_color(floor_base, -4), 8),
+        ],
+    );
+    let wall = TilePalette::new(
+        wall_base,
+        wall_alt,
+        [
+            TextureVariant::new('#', adjust_color(wall_base, 10), 8),
+            TextureVariant::new('+', adjust_color(wall_base, 6), 9),
+            TextureVariant::new('.', adjust_color(wall_base, 4), 10),
+        ],
+    );
+    let water = TilePalette::new(
+        water_base,
+        water_alt,
+        [
+            TextureVariant::new('~', adjust_color(water_base, 10), 8),
+            TextureVariant::new('-', adjust_color(water_base, 6), 9),
+            TextureVariant::new('.', adjust_color(water_base, 4), 10),
+        ],
+    );
+
+    TileTheme::builder()
+        .fallback(grass)
+        .tile(TileKind::Grass, grass)
+        .tile(TileKind::Trail, trail)
+        .tile(TileKind::Floor, floor)
+        .tile(TileKind::Sand, trail)
+        .tile(TileKind::Wall, wall)
+        .tile(TileKind::Water, water)
+        .build()
+}
+
+fn map_renderer() -> &'static MapRenderer {
+    MAP_RENDERER.get_or_init(|| {
+        MapRenderer::builder()
+            .config(RenderConfig {
+                map_tiles_vertical_hint: MAP_TILES_V,
+                cell_aspect: CELL_ASPECT,
+            })
+            .theme(dnd_map_theme())
+            .build()
+    })
 }
 
 fn spinner_frame(frame: u8) -> char {
@@ -2259,70 +2183,6 @@ fn chunk_word(word: &str, width: usize) -> Vec<String> {
         out.push(chunk.iter().collect::<String>());
     }
     out
-}
-
-fn tile_seed(x: u16, y: u16) -> u32 {
-    let mut n = x as u32;
-    n = n
-        .wrapping_mul(374761393)
-        .wrapping_add((y as u32).wrapping_mul(668265263));
-    n ^= n >> 13;
-    n = n.wrapping_mul(1274126177);
-    n ^= n >> 16;
-    n
-}
-
-fn cell_seed(x: u16, y: u16, dx: u16, dy: u16) -> u32 {
-    let mut n = tile_seed(x, y);
-    n ^= (dx as u32).wrapping_mul(2246822519);
-    n ^= (dy as u32).wrapping_mul(3266489917);
-    n ^= n >> 15;
-    n = n.wrapping_mul(668265263);
-    n ^= n >> 13;
-    n
-}
-
-fn tile_texture(tile: Tile, map_x: u16, map_y: u16) -> (char, Color, u8) {
-    let seed = tile_seed(map_x, map_y);
-    let variant = (seed % 3) as u8;
-    match tile {
-        Tile::Grass => match variant {
-            0 => ('.', adjust_color(Color::Rgb(34, 112, 58), 10), 6),
-            1 => ('\'', adjust_color(Color::Rgb(34, 112, 58), 6), 7),
-            _ => ('`', adjust_color(Color::Rgb(34, 112, 58), -4), 8),
-        },
-        Tile::Road => match variant {
-            0 => ('.', adjust_color(Color::Rgb(156, 132, 76), 6), 6),
-            1 => (':', adjust_color(Color::Rgb(156, 132, 76), 4), 7),
-            _ => ('\'', adjust_color(Color::Rgb(156, 132, 76), -4), 8),
-        },
-        Tile::Floor => match variant {
-            0 => ('.', adjust_color(Color::Rgb(90, 90, 94), 6), 6),
-            1 => (':', adjust_color(Color::Rgb(90, 90, 94), 4), 7),
-            _ => ('\'', adjust_color(Color::Rgb(90, 90, 94), -4), 8),
-        },
-        Tile::Wall => match variant {
-            0 => ('#', adjust_color(Color::Rgb(66, 74, 66), 10), 8),
-            1 => ('+', adjust_color(Color::Rgb(66, 74, 66), 6), 9),
-            _ => ('.', adjust_color(Color::Rgb(66, 74, 66), 4), 10),
-        },
-        Tile::Water => match variant {
-            0 => ('~', adjust_color(Color::Rgb(48, 86, 146), 10), 8),
-            1 => ('-', adjust_color(Color::Rgb(48, 86, 146), 6), 9),
-            _ => ('.', adjust_color(Color::Rgb(48, 86, 146), 4), 10),
-        },
-    }
-}
-
-fn map_viewport(state: &AppState, view_cols: u16, view_rows: u16) -> (u16, u16) {
-    let (x, y) = state.player_pos();
-    let half_w = view_cols / 2;
-    let half_h = view_rows / 2;
-    let max_x = state.map.width.saturating_sub(view_cols);
-    let max_y = state.map.height.saturating_sub(view_rows);
-    let start_x = x.saturating_sub(half_w).min(max_x);
-    let start_y = y.saturating_sub(half_h).min(max_y);
-    (start_x, start_y)
 }
 
 #[cfg(test)]

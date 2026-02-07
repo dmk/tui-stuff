@@ -571,6 +571,7 @@ dependencies = [
  "tui-dispatch",
  "tui-dispatch-components",
  "tui-dispatch-debug",
+ "tui-map",
 ]
 
 [[package]]
@@ -2598,6 +2599,13 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "tui-map"
+version = "0.1.0"
+dependencies = [
+ "ratatui",
 ]
 
 [[package]]
