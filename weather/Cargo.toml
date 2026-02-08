@@ -1,0 +1,29 @@
+[package]
+name = "weather"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "weather"
+path = "src/lib.rs"
+
+[[bin]]
+name = "weather"
+path = "src/main.rs"
+
+[dependencies]
+tui-dispatch = { version = "0.5.4", features = ["tasks", "subscriptions", "json-schema"] }
+tui-dispatch-components = "0.5.4"
+tui-dispatch-debug = { version = "0.5.4", features = ["json-schema"] }
+artbox = { version = "0.2.0", features = ["ratatui"] }
+schemars = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+reqwest = { version = "0.12", features = ["json"] }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ratatui = "0.29"
+crossterm = "0.28"
+urlencoding = "2"
