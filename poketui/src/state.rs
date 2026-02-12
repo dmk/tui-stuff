@@ -1,8 +1,8 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
-use tui_map::core::{MapGrid, MapRead, MapSize, TileKind};
 use tui_dispatch_debug::debug::{ron_string, DebugSection, DebugState};
+use tui_map::core::{MapGrid, MapRead, MapSize, TileKind};
 
 use crate::scenario::ScenarioRuntime;
 use crate::sprite::SpriteData;
@@ -154,33 +154,8 @@ pub struct MapState {
 impl MapState {
     pub fn new() -> Self {
         Self::from_str(
-            "LAKESIDE ROUTE",
-            r#"
-##################################################
-#gggggggggggggggggggggggggggggggggggggggggggggggg#
-#ggggggggggggssssssssssssgggggggggggggggggggggggg#
-#ggggggggggsswwwwwwwwwwwwssgggggggggggggggggggggg#
-#gggggggggsswwwwwwwwwwwwwwssggggggggggggggggggggg#
-#ggggggggsswwwwwwwwwwwwwwwwssgggggggggggggggggggg#
-#gggggggswwwwwwwwwwwwwwwwwwwsgggggggggggggggggggg#
-#gggggggsswwwwwwwwwwwwwwwwwssgggggggggggggggggggg#
-#ggggggggsswwwwwwwwwwwwwwwssggggggggggggggggggggg#
-#gggggggggsswwwwwwwwwwwwwssgggggggggggggggggggggg#
-#ggggggggggssssssssssssssssggggggggggggggggggggg#
-#gggggggggggggggggggggggggggggggggggggggggggggggg#
-#rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr#
-#gggggggggggggggggggggggggggggggggggggggggggggggg#
-#gggggggggggggggggggggggggggggggggggggggggggggggg#
-#ggggggggg###ggggggggggggggggggggggg###gggggggggg#
-#ggggggggg#r#ggggggggggggggggggggggg#r#gggggggggg#
-#ggggggggg#r#ggggggggggggggggggggggg#r#gggggggggg#
-#ggggggggg#r#ggggggggggggggggggggggg#r#gggggggggg#
-#ggggggggg#rrrrrrrrrrrrrrrrrrrrrrrrrrr#gggggggggg#
-#ggggggggg#######################r####gggggggggg#
-#ggggggggggggggggggggggggggggggggrgggggggggggggg#
-#ggggggggggggggggggggggggggggggggrgggggggggggggg#
-##################################################
-"#,
+            "LAKESIDE FRONTIER",
+            include_str!("../assets/scenarios/lakeside/map.txt"),
         )
     }
 
@@ -476,6 +451,8 @@ pub struct AppState {
     pub menu: Option<MenuState>,
     pub pokemon_select: Option<PokemonSelectState>,
     pub pause_menu: PauseMenuState,
+    #[serde(default)]
+    pub overworld_full_map: bool,
     pub message: Option<String>,
     pub steps_since_encounter: u16,
     pub rng_seed: u64,
@@ -525,6 +502,7 @@ impl AppState {
             }),
             pokemon_select: None,
             pause_menu: PauseMenuState::default(),
+            overworld_full_map: false,
             message: None,
             steps_since_encounter: 0,
             rng_seed: seed_from_time(),

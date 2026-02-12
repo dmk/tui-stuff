@@ -12,6 +12,7 @@ pub enum Action {
     UiTerminalResize(u16, u16),
     Tick,
     Move(Direction),
+    OverworldToggleFullMap,
 
     // Battle actions
     BattleMenuNext,

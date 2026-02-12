@@ -7,16 +7,16 @@ use ratatui::{
     Frame,
 };
 use std::sync::OnceLock;
-use tui_map::core::TileKind;
-use tui_map::render::{Camera, MapRenderer, RenderConfig, TextureVariant, TilePalette, TileTheme};
 use tui_dispatch::{EventKind, EventOutcome, RenderContext};
+use tui_map::core::TileKind;
+use tui_map::render::{
+    Camera, MapRenderer, MinimapMarker, RenderConfig, TextureVariant, TilePalette, TileTheme,
+};
 
 use crate::action::Action;
 use crate::sprite;
 use crate::sprite_backend;
-use crate::state::{
-    calc_hp, AppState, BattleKind, BattleStage, Direction as MoveDir, GameMode,
-};
+use crate::state::{calc_hp, AppState, BattleKind, BattleStage, Direction as MoveDir, GameMode};
 
 const BG_BASE: Color = Color::Rgb(24, 36, 26);
 const BG_PANEL: Color = Color::Rgb(34, 58, 38);
@@ -29,6 +29,8 @@ const ACCENT_GOLD: Color = Color::Rgb(222, 196, 120);
 const HIGHLIGHT_BG: Color = ACCENT_GREEN;
 const HIGHLIGHT_TEXT: Color = Color::Rgb(16, 26, 18);
 const BORDER_ACCENT: Color = Color::Rgb(74, 98, 82);
+const MINIMAP_PLAYER: Color = Color::Rgb(242, 246, 236);
+const MINIMAP_PLAYER_BLINK: Color = Color::Rgb(255, 236, 96);
 const CELL_ASPECT: f32 = 2.0;
 const MAP_TILES_V: u16 = 9;
 
@@ -272,6 +274,7 @@ fn handle_overworld_key(key: KeyEvent, _state: &AppState) -> EventOutcome<Action
         KeyCode::Down | KeyCode::Char('s') => Some(Action::Move(MoveDir::Down)),
         KeyCode::Left | KeyCode::Char('a') => Some(Action::Move(MoveDir::Left)),
         KeyCode::Right | KeyCode::Char('d') => Some(Action::Move(MoveDir::Right)),
+        KeyCode::Char('m') | KeyCode::Char('M') => Some(Action::OverworldToggleFullMap),
         KeyCode::Esc => Some(Action::PauseOpen),
         _ => None,
     };
@@ -673,17 +676,28 @@ fn render_overworld(frame: &mut Frame, area: Rect, state: &AppState) {
         .split(area);
 
     render_overworld_header(frame, layout[0], state);
-    let show_hud = area.width >= 90;
+    let show_hud = area.width >= 80;
     render_overworld_body(frame, layout[1], state, show_hud);
     render_overworld_status(frame, layout[2], state, show_hud);
 }
 
 fn render_overworld_header(frame: &mut Frame, area: Rect, state: &AppState) {
-    let block = panel_block(" ROUTE ", BG_HEADER);
+    let block = panel_block(
+        if state.overworld_full_map {
+            " FULL MAP "
+        } else {
+            " ROUTE "
+        },
+        BG_HEADER,
+    );
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let title = state.map.name.to_ascii_uppercase();
+    let title = if state.overworld_full_map {
+        "FULL MAP".to_string()
+    } else {
+        state.map.name.to_ascii_uppercase()
+    };
     let player = format_name(&state.player_name());
     let level = state.active_level();
     let line = Line::from(vec![
@@ -711,15 +725,15 @@ fn render_overworld_header(frame: &mut Frame, area: Rect, state: &AppState) {
 }
 
 fn render_overworld_body(frame: &mut Frame, area: Rect, state: &AppState, show_hud: bool) {
-    if show_hud {
+    if show_hud && !state.overworld_full_map {
         let columns = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Min(40), Constraint::Length(26)])
+            .constraints([Constraint::Min(40), Constraint::Length(30)])
             .split(area);
-        render_map(frame, columns[0], state);
+        render_map(frame, columns[0], state, false);
         render_overworld_panel(frame, columns[1], state);
     } else {
-        render_map(frame, area, state);
+        render_map(frame, area, state, state.overworld_full_map);
     }
 }
 
@@ -728,10 +742,25 @@ fn render_overworld_panel(frame: &mut Frame, area: Rect, state: &AppState) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(8), Constraint::Length(4)])
-        .split(inner);
+    let (stats_area, party_area) = if inner.width >= 12 && inner.height >= 11 {
+        let minimap_rows = inner.height.saturating_sub(6).clamp(5, 9);
+        let layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(minimap_rows),
+                Constraint::Min(2),
+                Constraint::Length(4),
+            ])
+            .split(inner);
+        render_overworld_minimap(frame, layout[0], state);
+        (layout[1], layout[2])
+    } else {
+        let layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(8), Constraint::Length(4)])
+            .split(inner);
+        (layout[0], layout[1])
+    };
 
     let hp_max = state.player_max_hp();
     let hp_current = state
@@ -787,10 +816,10 @@ fn render_overworld_panel(frame: &mut Frame, area: Rect, state: &AppState) {
     let paragraph = Paragraph::new(Text::from(lines))
         .alignment(Alignment::Left)
         .wrap(Wrap { trim: true });
-    frame.render_widget(paragraph, layout[0]);
+    frame.render_widget(paragraph, stats_area);
     render_party_sprite_strip(
         frame,
-        layout[1],
+        party_area,
         state,
         BG_PANEL_ALT,
         SPRITE_ID_PARTY_BASE,
@@ -800,17 +829,94 @@ fn render_overworld_panel(frame: &mut Frame, area: Rect, state: &AppState) {
     );
 }
 
-fn render_map(frame: &mut Frame, area: Rect, state: &AppState) {
-    let block = panel_block(state.map.name.as_str(), BG_PANEL_ALT);
+fn render_overworld_minimap(frame: &mut Frame, area: Rect, state: &AppState) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("Minimap")
+        .border_type(BorderType::Rounded)
+        .style(Style::default().bg(BG_PANEL).fg(TEXT_MAIN))
+        .border_style(Style::default().fg(BORDER_ACCENT));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    if inner.width < 8 || inner.height < 4 {
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
+    let markers = overworld_minimap_markers(state, false);
+
+    map_renderer().render_minimap(
+        frame,
+        inner,
+        &state.map,
+        Camera {
+            focus_x: state.player.x,
+            focus_y: state.player.y,
+        },
+        &markers,
+    );
+}
+
+fn overworld_minimap_markers(state: &AppState, blink_player: bool) -> Vec<MinimapMarker> {
+    let mut markers = Vec::with_capacity(state.pickups.len() + 1);
+    let blink_on = !blink_player || (state.tick / 4) % 2 == 0;
+    if blink_on {
+        let player_color = if blink_player {
+            MINIMAP_PLAYER_BLINK
+        } else {
+            MINIMAP_PLAYER
+        };
+        markers.push(MinimapMarker::new(
+            state.player.x,
+            state.player.y,
+            player_color,
+        ));
+    }
+    for pickup in &state.pickups {
+        if pickup.x == state.player.x && pickup.y == state.player.y {
+            continue;
+        }
+        markers.push(MinimapMarker::new(pickup.x, pickup.y, ACCENT_GOLD));
+    }
+    markers
+}
+
+fn render_map(frame: &mut Frame, area: Rect, state: &AppState, full_map: bool) {
+    let title = if full_map {
+        "FULL MAP (M TO CLOSE)"
+    } else {
+        state.map.name.as_str()
+    };
+    let block = panel_block(title, BG_PANEL_ALT);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let too_small = if full_map {
+        inner.width < 4 || inner.height < 2
+    } else {
+        inner.width < 8 || inner.height < 4
+    };
+    if too_small {
         let warning = Paragraph::new("Resize for map view.")
             .style(Style::default().fg(TEXT_DIM))
             .alignment(Alignment::Center)
             .wrap(Wrap { trim: true });
         frame.render_widget(warning, inner);
+        return;
+    }
+
+    if full_map {
+        let markers = overworld_minimap_markers(state, true);
+        map_renderer().render_minimap(
+            frame,
+            inner,
+            &state.map,
+            Camera {
+                focus_x: state.map.width / 2,
+                focus_y: state.map.height / 2,
+            },
+            &markers,
+        );
         return;
     }
 
@@ -852,7 +958,8 @@ fn render_map(frame: &mut Frame, area: Rect, state: &AppState) {
         if let Some((tile_x, tile_y)) = render.tile_cell_origin(state.player.x, state.player.y) {
             let (cols, rows) = sprite_fit(sprite, render.cols_per_tile, render.rows_per_tile);
             let sprite_frame = sprite.frame(state.player_sprite.frame_index);
-            if let Ok(sequence) = sprite::kitty_sequence(sprite_frame, cols, rows, SPRITE_ID_PLAYER_MAP)
+            if let Ok(sequence) =
+                sprite::kitty_sequence(sprite_frame, cols, rows, SPRITE_ID_PLAYER_MAP)
             {
                 let offset_x = tile_x + render.cols_per_tile.saturating_sub(cols) / 2;
                 let offset_y = tile_y + render.rows_per_tile.saturating_sub(rows) / 2;
@@ -871,11 +978,17 @@ fn render_overworld_status(frame: &mut Frame, area: Rect, state: &AppState, show
         .message
         .as_deref()
         .unwrap_or("Wander the grass to find Pokemon.");
+    let map_toggle_hint = if state.overworld_full_map {
+        "M close full map"
+    } else {
+        "M full map"
+    };
+    let controls = format!("Arrows/WASD move  |  {}  |  Esc menu", map_toggle_hint);
     if show_hud {
         let lines = vec![
             Line::from(Span::styled(message, Style::default().fg(TEXT_MAIN))),
             Line::from(Span::styled(
-                "Arrows/WASD move  |  Esc menu",
+                controls.clone(),
                 Style::default().fg(TEXT_DIM),
             )),
         ];
@@ -932,10 +1045,7 @@ fn render_overworld_status(frame: &mut Frame, area: Rect, state: &AppState, show
                 Line::from("")
             },
             Line::from(Span::styled(message, Style::default().fg(TEXT_MAIN))),
-            Line::from(Span::styled(
-                "Arrows/WASD move  |  Esc menu",
-                Style::default().fg(TEXT_DIM),
-            )),
+            Line::from(Span::styled(controls, Style::default().fg(TEXT_DIM))),
         ];
         let paragraph = Paragraph::new(Text::from(lines))
             .style(Style::default().fg(TEXT_MAIN))
@@ -977,7 +1087,11 @@ fn render_battle(frame: &mut Frame, area: Rect, state: &AppState) {
     render_player_panel(frame, pokemon_layout[1], state);
     render_battle_command(frame, layout[1], state);
 
-    if let Some(battle) = state.battle.as_ref().filter(|battle| battle_should_show_modal(battle)) {
+    if let Some(battle) = state
+        .battle
+        .as_ref()
+        .filter(|battle| battle_should_show_modal(battle))
+    {
         render_battle_message_modal(frame, area, &battle.message);
     }
 }
@@ -1421,37 +1535,41 @@ fn render_party_sprite_strip(
             scale = (scale * active_boost).clamp(0.1, 1.2);
         }
         let sprite_state = state.party_sprites.get(idx);
-        let draw_hp_bar = show_shadow || sprite_state.and_then(|state| state.sprite.as_ref()).is_none();
+        let draw_hp_bar = show_shadow
+            || sprite_state
+                .and_then(|state| state.sprite.as_ref())
+                .is_none();
         let can_draw_shadow = is_active && show_shadow && slot.height >= 2;
-        let reserved_rows = (if draw_hp_bar { 1 } else { 0 }) + (if can_draw_shadow { 1 } else { 0 });
+        let reserved_rows =
+            (if draw_hp_bar { 1 } else { 0 }) + (if can_draw_shadow { 1 } else { 0 });
         let sprite_height = slot.height.saturating_sub(reserved_rows as u16);
         let sprite_area = Rect::new(slot.x, slot.y, slot.width, sprite_height.max(1));
         let mut sprite_drawn = false;
 
         if let Some(sprite_state) = sprite_state {
             if let Some(sprite) = sprite_state.sprite.as_ref() {
-            if sprite_height > 0 {
-                let (cols, rows) =
-                    sprite_fit_scaled(sprite, sprite_area.width, sprite_area.height, scale);
-                let frame_data = sprite.frame(sprite_state.frame_index);
-                if let Ok(sequence) =
-                    sprite::kitty_sequence(frame_data, cols, rows, sprite_base + idx as u32)
-                {
-                    let offset_x = sprite_area
-                        .x
-                        .saturating_add(sprite_area.width.saturating_sub(cols) / 2);
-                    let offset_y = sprite_area
-                        .y
-                        .saturating_add(sprite_area.height.saturating_sub(rows) / 2);
-                    sprite_backend::set_sprite(
-                        sprite_base + idx as u32,
-                        offset_x,
-                        offset_y,
-                        sequence,
-                    );
-                    sprite_drawn = true;
+                if sprite_height > 0 {
+                    let (cols, rows) =
+                        sprite_fit_scaled(sprite, sprite_area.width, sprite_area.height, scale);
+                    let frame_data = sprite.frame(sprite_state.frame_index);
+                    if let Ok(sequence) =
+                        sprite::kitty_sequence(frame_data, cols, rows, sprite_base + idx as u32)
+                    {
+                        let offset_x = sprite_area
+                            .x
+                            .saturating_add(sprite_area.width.saturating_sub(cols) / 2);
+                        let offset_y = sprite_area
+                            .y
+                            .saturating_add(sprite_area.height.saturating_sub(rows) / 2);
+                        sprite_backend::set_sprite(
+                            sprite_base + idx as u32,
+                            offset_x,
+                            offset_y,
+                            sequence,
+                        );
+                        sprite_drawn = true;
+                    }
                 }
-            }
             }
         }
 
@@ -1482,12 +1600,7 @@ fn render_party_sprite_strip(
         if let Some(bar_y) = bar_y {
             let max_hp = calc_hp(member.info.hp, member.level).max(1);
             let ratio = (member.hp.min(max_hp) as f32) / (max_hp as f32);
-            let bar_width = slot
-                .width
-                .saturating_sub(2)
-                .min(12)
-                .max(4)
-                .min(slot.width);
+            let bar_width = slot.width.saturating_sub(2).min(12).max(4).min(slot.width);
             let start_x = slot
                 .x
                 .saturating_add(slot.width.saturating_sub(bar_width) / 2);

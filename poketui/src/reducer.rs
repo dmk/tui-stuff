@@ -21,6 +21,7 @@ pub fn reducer(state: &mut AppState, action: Action) -> DispatchResult<Effect> {
         Action::Init => {
             // Start at main menu and check if save exists
             state.mode = GameMode::MainMenu;
+            state.overworld_full_map = false;
             state.menu = Some(MenuState {
                 selected: 0,
                 has_save: false,
@@ -42,6 +43,14 @@ pub fn reducer(state: &mut AppState, action: Action) -> DispatchResult<Effect> {
         }
         Action::Tick => tick_animation(state),
         Action::Move(direction) => move_player(state, direction),
+        Action::OverworldToggleFullMap => {
+            if state.mode == GameMode::Overworld {
+                state.overworld_full_map = !state.overworld_full_map;
+                DispatchResult::changed()
+            } else {
+                DispatchResult::unchanged()
+            }
+        }
         Action::BattleMenuNext => battle_menu_change(state, 1),
         Action::BattleMenuPrev => battle_menu_change(state, -1),
         Action::BattleConfirm => battle_confirm(state),
@@ -523,10 +532,7 @@ fn battle_confirm(state: &mut AppState) -> DispatchResult<Effect> {
                         return DispatchResult::changed();
                     }
                     if ability_cd > 0 {
-                        push_message(
-                            state,
-                            format!("Ability recharging ({}).", ability_cd),
-                        );
+                        push_message(state, format!("Ability recharging ({}).", ability_cd));
                         set_battle_menu_prompt(state);
                         return DispatchResult::changed();
                     }
@@ -1882,6 +1888,7 @@ fn menu_confirm(state: &mut AppState) -> DispatchResult<Effect> {
         0 => {
             // New Game -> Pokemon Select
             state.mode = GameMode::PokemonSelect;
+            state.overworld_full_map = false;
             state.menu = None;
             let starters = scenario_starters(state);
             state.pokemon_select = Some(PokemonSelectState {
@@ -1951,6 +1958,7 @@ fn starter_confirm(state: &mut AppState) -> DispatchResult<Effect> {
 
     // Start the game with chosen Pokemon
     state.mode = GameMode::Overworld;
+    state.overworld_full_map = false;
     state.player_sprite.reset();
     state.player_sprite.loading = true;
     state.enemy_sprite.reset();
@@ -2001,6 +2009,7 @@ fn pause_confirm(state: &mut AppState) -> DispatchResult<Effect> {
         2 | _ => {
             // Quit to Menu
             state.pause_menu.is_open = false;
+            state.overworld_full_map = false;
             state.mode = GameMode::MainMenu;
             state.menu = Some(MenuState {
                 selected: 0,
