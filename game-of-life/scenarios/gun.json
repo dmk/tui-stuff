@@ -1,0 +1,5 @@
+[
+  { "PatternSelect": "GosperGun" },
+  "PatternLoad",
+  { "Advance": 120 }
+]

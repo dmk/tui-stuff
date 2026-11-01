@@ -6,6 +6,11 @@ Random TUI projects, probably built with [tui-dispatch](https://github.com/dmk/t
 
 ## Projects
 
+### [game-of-life](./game-of-life)
+Conway's Game of Life: age-colored cells, fading trails, pattern planting, and replayable experiments
+
+<img src="./assets/screens/game-of-life.png" width="600" alt="Life cellular observatory">
+
 ### [weather](./weather)
 Terminal weather app using Open-Meteo API
 

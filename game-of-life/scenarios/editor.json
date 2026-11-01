@@ -1,0 +1,9 @@
+[
+  "Clear",
+  { "PatternSelect": "Glider" },
+  "PatternStamp",
+  { "CursorMove": { "dx": 12, "dy": -6 } },
+  { "PatternSelect": "Pulsar" },
+  "PatternStamp",
+  { "Advance": 8 }
+]
