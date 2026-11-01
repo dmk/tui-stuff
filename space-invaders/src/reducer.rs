@@ -17,14 +17,33 @@ pub fn reducer(state: &mut AppState, action: Action) -> ReducerResult {
             if state.phase == Phase::Playing && state.viewport_ready() =>
         {
             let dx = match direction {
-                Direction::Left => -1,
-                Direction::Right => 1,
+                Direction::Left => -PLAYER_MOVE_STEP,
+                Direction::Right => PLAYER_MOVE_STEP,
             };
             let x = (state.player.x + dx).clamp(0, WORLD_WIDTH - 5);
             if state.player.x == x {
                 return ReducerResult::unchanged();
             }
             state.player.x = x;
+            state.player.motion_fraction = 0;
+        }
+        Action::PlayerKeyDown(key) if state.phase == Phase::Playing && state.viewport_ready() => {
+            if state.player.held_keys & key.mask() != 0 {
+                return ReducerResult::unchanged();
+            }
+            state.player.held_keys |= key.mask();
+        }
+        Action::PlayerKeyUp(key) => {
+            if state.player.held_keys & key.mask() == 0 {
+                return ReducerResult::unchanged();
+            }
+            state.player.held_keys &= !key.mask();
+        }
+        Action::PlayerControlsClear => {
+            if state.player.held_keys == 0 {
+                return ReducerResult::unchanged();
+            }
+            state.player.clear_controls();
         }
         Action::PlayerFire
             if state.phase == Phase::Playing
@@ -41,6 +60,7 @@ pub fn reducer(state: &mut AppState, action: Action) -> ReducerResult {
         }
         Action::PauseToggle => match state.phase {
             Phase::Playing | Phase::Respawning | Phase::WaveClear => {
+                state.player.clear_controls();
                 state.resume_phase = Some(state.phase);
                 state.phase = Phase::Paused;
             }
@@ -65,7 +85,10 @@ pub fn reducer(state: &mut AppState, action: Action) -> ReducerResult {
             }
         }
         Action::ViewportResize { width, height } => {
-            if (width, height) == (state.viewport_width, state.viewport_height) {
+            let controls_changed = state.player.held_keys != 0;
+            state.player.clear_controls();
+            if !controls_changed && (width, height) == (state.viewport_width, state.viewport_height)
+            {
                 return ReducerResult::unchanged();
             }
             state.viewport_width = width;
@@ -119,11 +142,15 @@ fn step(state: &mut AppState) -> bool {
                 state.populate_wave();
             }
             state.player.x = PLAYER_START_X;
+            state.player.motion_fraction = 0;
+            state.player.clear_controls();
             state.player.invulnerable = INVULNERABLE_TICKS;
             state.phase = Phase::Playing;
         }
         return true;
     }
+
+    state.player.advance_movement();
 
     state.formation_timer += 1;
     if state.formation_timer >= formation_interval(state) {
@@ -147,6 +174,7 @@ fn step(state: &mut AppState) -> bool {
     }
 
     if state.aliens.iter().any(|alien| alien.y + 4 >= PLAYER_Y) {
+        state.player.clear_controls();
         state.phase = Phase::GameOver;
         state.bullets.clear();
         return true;
@@ -164,6 +192,7 @@ fn step(state: &mut AppState) -> bool {
 
     // A final kill takes precedence over the respawn delay, but never game over.
     if state.aliens.is_empty() && state.phase != Phase::GameOver {
+        state.player.clear_controls();
         state.phase = Phase::WaveClear;
         state.phase_timer = WAVE_CLEAR_TICKS;
         state.bullets.clear();
@@ -330,6 +359,7 @@ fn advance_bullets_inner(state: &mut AppState, move_aliens: bool) {
             }
             Some(Target::Player) => {
                 if state.player.invulnerable == 0 && state.phase == Phase::Playing {
+                    state.player.clear_controls();
                     state.lives = state.lives.saturating_sub(1);
                     state.explosions.push(Explosion {
                         x: state.player.x,

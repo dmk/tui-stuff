@@ -1,5 +1,5 @@
 use space_invaders::{
-    action::{Action, Direction},
+    action::{Action, Direction, MovementKey},
     reducer::{advance_bullets, fire_alien_bullet, formation_interval, reducer},
     state::*,
 };
@@ -196,6 +196,109 @@ fn movement_clamps_and_does_not_work_on_title_or_pause() {
     reducer(&mut state, Action::PauseToggle);
     reducer(&mut state, Action::PlayerMove(Direction::Left));
     assert_eq!(state.player.x, WORLD_WIDTH - 5);
+}
+
+#[test]
+fn held_movement_advances_every_tick_without_repeat_and_stops_on_release() {
+    let mut state = playing();
+    reducer(&mut state, Action::PlayerKeyDown(MovementKey::Right));
+    assert_eq!(
+        state.player.x, PLAYER_START_X,
+        "input must not jump the ship"
+    );
+    reducer(&mut state, Action::Tick);
+    assert_eq!(state.player.x, PLAYER_START_X + 1);
+    reducer(&mut state, Action::GameAdvanceTicks(9));
+    assert_eq!(state.player.x, PLAYER_START_X + 10);
+    assert!(!reducer(&mut state, Action::PlayerKeyDown(MovementKey::Right)).changed);
+    reducer(&mut state, Action::Tick);
+    assert_eq!(state.player.x, PLAYER_START_X + 11);
+    reducer(&mut state, Action::PlayerKeyUp(MovementKey::Right));
+    reducer(&mut state, Action::GameAdvanceTicks(10));
+    assert_eq!(state.player.x, PLAYER_START_X + 11);
+}
+
+#[test]
+fn held_keys_handle_aliases_and_opposite_directions_independently() {
+    let mut state = playing();
+    reducer(&mut state, Action::PlayerKeyDown(MovementKey::Left));
+    reducer(&mut state, Action::PlayerKeyDown(MovementKey::A));
+    reducer(&mut state, Action::PlayerKeyUp(MovementKey::A));
+    reducer(&mut state, Action::Tick);
+    assert_eq!(state.player.x, PLAYER_START_X - 1);
+    reducer(&mut state, Action::PlayerKeyDown(MovementKey::D));
+    reducer(&mut state, Action::GameAdvanceTicks(5));
+    assert_eq!(
+        state.player.x,
+        PLAYER_START_X - 1,
+        "opposite directions cancel"
+    );
+    reducer(&mut state, Action::PlayerKeyUp(MovementKey::Left));
+    reducer(&mut state, Action::Tick);
+    assert_eq!(state.player.x, PLAYER_START_X);
+}
+
+#[test]
+fn held_ship_crosses_the_field_in_one_and_a_half_seconds_and_clamps() {
+    let mut state = playing();
+    state.player.x = 0;
+    state.player.invulnerable = 1000;
+    reducer(&mut state, Action::PlayerKeyDown(MovementKey::D));
+    reducer(&mut state, Action::GameAdvanceTicks(75));
+    assert_eq!(state.player.x, WORLD_WIDTH - 5);
+    reducer(&mut state, Action::GameAdvanceTicks(20));
+    assert_eq!(state.player.x, WORLD_WIDTH - 5);
+    reducer(&mut state, Action::PlayerKeyUp(MovementKey::D));
+    reducer(&mut state, Action::PlayerKeyDown(MovementKey::A));
+    reducer(&mut state, Action::GameAdvanceTicks(80));
+    assert_eq!(state.player.x, 0);
+    assert_eq!(state.player.motion_fraction, 0);
+}
+
+#[test]
+fn pause_resize_and_debug_clear_do_not_resume_stale_held_input() {
+    for cancellation in [
+        Action::PauseToggle,
+        Action::ViewportResize {
+            width: 80,
+            height: 40,
+        },
+        Action::PlayerControlsClear,
+    ] {
+        let mut state = playing();
+        reducer(&mut state, Action::PlayerKeyDown(MovementKey::Right));
+        assert!(reducer(&mut state, cancellation.clone()).changed);
+        assert_eq!(state.player.held_keys, 0);
+        if matches!(cancellation, Action::PauseToggle) {
+            reducer(&mut state, Action::PauseToggle);
+        }
+        let x = state.player.x;
+        reducer(&mut state, Action::GameAdvanceTicks(5));
+        assert_eq!(state.player.x, x);
+    }
+}
+
+#[test]
+fn held_input_and_fractional_positions_round_trip_with_snapshots() {
+    let mut state = playing();
+    state.player.motion_fraction = 500;
+    reducer(&mut state, Action::PlayerKeyDown(MovementKey::Right));
+    let mut loaded: AppState =
+        serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
+    reducer(&mut state, Action::GameAdvanceTicks(5));
+    for _ in 0..5 {
+        reducer(&mut loaded, Action::Tick);
+    }
+    assert_eq!(loaded, state);
+    assert_eq!(state.player.motion_fraction, 500);
+    let mut old_player = serde_json::to_value(&state.player).unwrap();
+    old_player.as_object_mut().unwrap().remove("held_keys");
+    old_player
+        .as_object_mut()
+        .unwrap()
+        .remove("motion_fraction");
+    let restored: Player = serde_json::from_value(old_player).unwrap();
+    assert_eq!((restored.held_keys, restored.motion_fraction), (0, 0));
 }
 
 #[test]

@@ -18,12 +18,24 @@ simulation stops until the terminal is large enough again.
 | Key | Action |
 | --- | --- |
 | Enter | Launch; play again after game over |
-| ← / → or A / D | Move; terminal key repeat is supported |
+| ← / → or A / D | Hold to move; release to stop |
 | Space | Fire; repeat is limited by the firing cooldown |
 | P / Escape | Pause or resume |
 | R | Restart with the original seed |
 | Q / Ctrl-C | Quit |
-| F12 | Inspect state, actions, and frame cells |
+| F12 (start with `--debug`) | Inspect state, actions, and frame cells |
+
+Ghostty and other terminals supporting the Kitty keyboard protocol automatically
+use **held movement at 50 columns/second**, driven by the 20 ms game tick.
+Key repeat does not change speed. The ship crosses the field in about 1.5 seconds,
+with immediate start/stop and independent A/D and arrow-key tracking.
+Held controls clear on pause, resize, respawn, wave transitions, and debug focus.
+
+Keyboard support is negotiated before the event loop starts; the previous
+protocol is restored on exit. Use `--keyboard-mode held` to force the enhanced
+protocol, or `--keyboard-mode legacy` for one-column press/repeat input on older
+terminals. `--keyboard-mode auto` is the default. Headless runs never send
+terminal protocol commands.
 
 Magenta squid score 30, cyan crabs 20, green octopuses 10. Saucers award a
 seeded 100–300 points. Shields block shots from either direction, including
@@ -82,6 +94,13 @@ and `GameAdvanceTicks(n)`. Fifty ticks equal one second of game time without
 sleeping. The live clock is disabled whenever actions are loaded or a single
 frame is requested. An interactive replay therefore stays frozen afterward
 unless more actions are supplied; normal play runs without `--debug-actions-in`.
+
+Held movement records `PlayerKeyDown` / `PlayerKeyUp` with `Left`, `A`, `Right`,
+or `D`, alongside the ticks. For example, `PlayerKeyDown("Right")`, ten ticks,
+and `PlayerKeyUp("Right")` moves ten columns and stops. See
+`scenarios/held-move.json`. `PlayerMove` remains available as a one-column nudge
+for scripts and legacy input. Held-key state and fractional positions are part
+of snapshots; older snapshots default those fields to zero.
 
 ```json
 [

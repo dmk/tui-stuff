@@ -308,3 +308,28 @@ fn controls_accept_presses_repeats_and_ignore_release() {
         }]
     );
 }
+
+#[test]
+fn held_controls_map_down_and_up_but_ignore_repeat() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+    use space_invaders::{action::MovementKey, input::KeyboardMode, ui::map_event_with_mode};
+    let state = AppState::default();
+    for (code, movement) in [
+        (KeyCode::Left, MovementKey::Left),
+        (KeyCode::Char('a'), MovementKey::A),
+        (KeyCode::Right, MovementKey::Right),
+        (KeyCode::Char('d'), MovementKey::D),
+    ] {
+        for (kind, expected) in [
+            (KeyEventKind::Press, vec![Action::PlayerKeyDown(movement)]),
+            (KeyEventKind::Release, vec![Action::PlayerKeyUp(movement)]),
+            (KeyEventKind::Repeat, vec![]),
+        ] {
+            let event = EventKind::Key(KeyEvent::new_with_kind(code, KeyModifiers::NONE, kind));
+            assert_eq!(
+                map_event_with_mode(&event, &state, KeyboardMode::Held).actions,
+                expected
+            );
+        }
+    }
+}

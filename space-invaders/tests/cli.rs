@@ -176,6 +176,45 @@ fn default_headless_frame_is_the_title_screen() {
 }
 
 #[test]
+fn held_movement_script_stops_and_records_replayable_key_state() {
+    let temp = TempDir::new();
+    let state_path = temp.file("held-state.json");
+    let recorded_path = temp.file("held-actions.json");
+    let replayed_path = temp.file("held-replayed.json");
+    let output = run(&[
+        "--debug-render-once",
+        "--keyboard-mode",
+        "held",
+        "--debug-actions-in",
+        "scenarios/held-move.json",
+        "--debug-state-out",
+        &state_path,
+        "--debug-actions-out",
+        &recorded_path,
+    ]);
+    assert!(
+        !output.stdout.contains(&0x1b),
+        "headless held mode must not negotiate a terminal protocol"
+    );
+    let state: AppState =
+        serde_json::from_str(&std::fs::read_to_string(&state_path).unwrap()).unwrap();
+    assert_eq!(state.player.x, space_invaders::state::PLAYER_START_X + 10);
+    assert_eq!(state.player.held_keys, 0);
+    assert_eq!(state.tick, 35);
+    run(&[
+        "--debug-render-once",
+        "--debug-actions-in",
+        &recorded_path,
+        "--debug-state-out",
+        &replayed_path,
+    ]);
+    assert_eq!(
+        std::fs::read_to_string(&state_path).unwrap(),
+        std::fs::read_to_string(&replayed_path).unwrap()
+    );
+}
+
+#[test]
 fn default_sizing_grows_to_fit_but_compact_can_be_requested() {
     let args = [
         "--debug-render-once",

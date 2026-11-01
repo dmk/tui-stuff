@@ -26,6 +26,7 @@ directly as top-down terminal row positions.
 | Medium / large layouts | 112×59 / 176×78 |
 | First-wave rows | Y = 7, 13, 19, 25, 31; alien height 4 |
 | Bunker / ship positions | Y = 64 / 72 |
+| Player movement | Held input, 50 horizontal units/s on the fixed clock; about 1.5 s across the field |
 | First-wave room below lowest alien | 37 vertical units |
 | Sideways travel with a full fleet | 15 units between opposing bounds |
 | Whole-fleet cadence | `ceil(alive × 1000 / (60 × 20))` simulation ticks, minimum 1 |

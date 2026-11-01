@@ -11,6 +11,9 @@ pub const MIN_HEIGHT: u16 = WORLD_HEIGHT as u16 / 2 + 2;
 pub const ALIEN_COLUMNS: u8 = 11;
 pub const INITIAL_ALIEN_COUNT: usize = 5 * ALIEN_COLUMNS as usize;
 pub const PLAYER_START_X: i32 = (WORLD_WIDTH - 5) / 2;
+pub const PLAYER_MOVE_STEP: i32 = 1;
+pub const PLAYER_SPEED: i32 = 50;
+pub const POSITION_SCALE: i32 = 1000;
 pub const PLAYER_Y: i32 = 72;
 pub const SHIELD_Y: i32 = 64;
 pub const ALIEN_START_X: i32 = 7;
@@ -92,11 +95,32 @@ impl Alien {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Player {
     pub x: i32,
+    /// Sub-column position for tick-driven movement; old snapshots default to 0.
+    #[serde(default)]
+    pub motion_fraction: i32,
+    #[serde(default)]
+    pub held_keys: u8,
     pub cooldown: u32,
     pub invulnerable: u32,
 }
 
 impl Player {
+    pub fn clear_controls(&mut self) {
+        self.held_keys = 0;
+    }
+
+    pub fn advance_movement(&mut self) {
+        let left = self.held_keys & 3 != 0;
+        let right = self.held_keys & 12 != 0;
+        let direction = i32::from(right) - i32::from(left);
+        let position = (self.x * POSITION_SCALE
+            + self.motion_fraction
+            + direction * PLAYER_SPEED * crate::TICK_MS as i32)
+            .clamp(0, (WORLD_WIDTH - 5) * POSITION_SCALE);
+        self.x = position / POSITION_SCALE;
+        self.motion_fraction = position % POSITION_SCALE;
+    }
+
     pub fn bounds(&self) -> Bounds {
         Bounds::new(self.x, PLAYER_Y, 5, 4)
     }
@@ -249,6 +273,8 @@ impl AppState {
             rng_state: seed,
             player: Player {
                 x: PLAYER_START_X,
+                motion_fraction: 0,
+                held_keys: 0,
                 cooldown: 0,
                 invulnerable: 0,
             },
@@ -314,6 +340,8 @@ impl AppState {
         self.explosions.clear();
         self.saucer = None;
         self.player.x = PLAYER_START_X;
+        self.player.motion_fraction = 0;
+        self.player.clear_controls();
         self.player.cooldown = 0;
         self.formation_direction = 1;
         self.formation_timer = 0;

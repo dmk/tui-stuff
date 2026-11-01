@@ -1,4 +1,4 @@
-use std::{io, path::PathBuf, time::Duration};
+use std::{cell::RefCell, io, path::PathBuf, time::Duration};
 
 use clap::Parser;
 use ratatui::{
@@ -10,10 +10,11 @@ use tui_dispatch_debug::{debug::DebugLayer, DebugCliArgs, DebugSession};
 
 use space_invaders::{
     action::Action,
+    input::{KeyboardMode, KeyboardSession},
     reducer::reducer,
     sprites::SpriteSizing,
     state::{AppState, MIN_HEIGHT},
-    ui::{map_event, GameUi},
+    ui::{map_event_with_mode, GameUi},
     DEFAULT_SEED, TICK_MS,
 };
 
@@ -25,6 +26,9 @@ struct Args {
     /// Automatically fit sprites to the terminal; compact forces 5×2 sprites.
     #[arg(long, value_enum, default_value_t = SpriteSizing::Auto)]
     sprite_size: SpriteSizing,
+    /// Auto negotiates smooth held movement; legacy keeps stepped input.
+    #[arg(long, value_enum, default_value_t = KeyboardMode::Auto)]
+    keyboard_mode: KeyboardMode,
     /// Headless frame width (interactive play uses the terminal size).
     #[arg(long, default_value_t = 80, value_parser = clap::value_parser!(u16).range(1..=512))]
     width: u16,
@@ -69,11 +73,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if headless {
         let mut terminal = Terminal::new(TestBackend::new(args.width, args.height))?;
-        run(&mut terminal, &session, &args, scripted).await?;
+        run(
+            &mut terminal,
+            &session,
+            &args,
+            scripted,
+            KeyboardMode::Legacy,
+        )
+        .await?;
     } else {
         let mut terminal = ratatui::try_init()?;
         let _restore = RestoreTerminal;
-        run(&mut terminal, &session, &args, scripted).await?;
+        let keyboard = KeyboardSession::start(args.keyboard_mode)?;
+        run(&mut terminal, &session, &args, scripted, keyboard.mode()).await?;
     }
     Ok(())
 }
@@ -83,11 +95,15 @@ async fn run<B: Backend>(
     session: &DebugSession,
     args: &Args,
     scripted: bool,
+    keyboard_mode: KeyboardMode,
 ) -> Result<(), Box<dyn std::error::Error>>
 where
     B::Error: Send + Sync + 'static,
 {
     let mut state = session.load_state_or_else(|| Ok::<_, io::Error>(AppState::new(args.seed)))?;
+    if !session.render_once() && !scripted {
+        state.player.clear_controls();
+    }
     let size = terminal.size()?;
     reducer(
         &mut state,
@@ -103,6 +119,7 @@ where
         sizing: args.sprite_size,
         ..GameUi::default()
     };
+    let action_sender = RefCell::new(None::<tokio::sync::mpsc::UnboundedSender<Action>>);
     let output = session
         .run_effect_app(
             terminal,
@@ -112,6 +129,7 @@ where
             None,
             Some(Action::Quit),
             |runtime| {
+                *action_sender.borrow_mut() = Some(runtime.action_tx());
                 if !session.render_once() && !scripted {
                     runtime.subscriptions().interval(
                         "game-clock",
@@ -120,8 +138,18 @@ where
                     );
                 }
             },
-            |frame, area, state, _ctx| ui.render(frame, area, state),
-            map_event,
+            |frame, area, state, ctx| {
+                // DebugSession intercepts F12 before the input mapper. Queue a
+                // store action when it takes focus so swallowed releases cannot
+                // leave the ship moving after the overlay closes.
+                if !ctx.is_focused() && state.player.held_keys != 0 {
+                    if let Some(sender) = action_sender.borrow().as_ref() {
+                        let _ = sender.send(Action::PlayerControlsClear);
+                    }
+                }
+                ui.render(frame, area, state);
+            },
+            |event, state| map_event_with_mode(event, state, keyboard_mode),
             |action| matches!(action, Action::Quit),
             |effect: NoEffect, _ctx| match effect {},
         )

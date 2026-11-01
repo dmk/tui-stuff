@@ -1,0 +1,8 @@
+[
+  "GameStart",
+  {"PlayerKeyDown": "Right"},
+  {"GameAdvanceTicks": 10},
+  {"PlayerKeyUp": "Right"},
+  "PlayerFire",
+  {"GameAdvanceTicks": 25}
+]

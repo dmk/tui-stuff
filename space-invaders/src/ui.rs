@@ -11,9 +11,12 @@ use tui_dispatch::{Component, EventKind, EventOutcome};
 use tui_dispatch_components::{style::BorderStyle, Modal, ModalBehavior, ModalProps, ModalStyle};
 
 use crate::{
-    action::{Action, Direction},
+    action::{Action, Direction, MovementKey},
+    input::KeyboardMode,
     sprites::{self, SpriteAtlas, SpriteId, SpriteSize, SpriteSizing},
-    state::{AlienKind, AppState, Owner, Phase, Shield, MIN_HEIGHT, MIN_WIDTH, PLAYER_Y},
+    state::{
+        AlienKind, AppState, Owner, Phase, Shield, MIN_HEIGHT, MIN_WIDTH, PLAYER_Y, POSITION_SCALE,
+    },
 };
 
 const BACKGROUND: Color = Color::Rgb(8, 10, 17);
@@ -24,6 +27,14 @@ fn rgb(value: (u8, u8, u8)) -> Color {
 }
 
 pub fn map_event(event: &EventKind, state: &AppState) -> EventOutcome<Action> {
+    map_event_with_mode(event, state, KeyboardMode::Legacy)
+}
+
+pub fn map_event_with_mode(
+    event: &EventKind,
+    state: &AppState,
+    mode: KeyboardMode,
+) -> EventOutcome<Action> {
     if let EventKind::Resize(width, height) = event {
         return EventOutcome::action(Action::ViewportResize {
             width: *width,
@@ -31,7 +42,7 @@ pub fn map_event(event: &EventKind, state: &AppState) -> EventOutcome<Action> {
         })
         .with_render();
     }
-    let mut component = Controls;
+    let mut component = Controls { mode };
     EventOutcome::from_actions(component.handle_event(event, state))
 }
 
@@ -124,7 +135,10 @@ fn put(frame: &mut Frame, clip: Rect, x: i32, y: i32, ch: char, color: Color) {
     }
 }
 
-pub struct Controls;
+#[derive(Default)]
+pub struct Controls {
+    pub mode: KeyboardMode,
+}
 
 impl Component<Action> for Controls {
     type Props<'a> = &'a AppState;
@@ -137,7 +151,29 @@ impl Component<Action> for Controls {
         let EventKind::Key(key) = event else {
             return None;
         };
+        if self.mode == KeyboardMode::Held {
+            let movement = match key.code {
+                KeyCode::Left => Some(MovementKey::Left),
+                KeyCode::Char('a' | 'A') => Some(MovementKey::A),
+                KeyCode::Right => Some(MovementKey::Right),
+                KeyCode::Char('d' | 'D') => Some(MovementKey::D),
+                _ => None,
+            };
+            if let Some(movement) = movement {
+                return match key.kind {
+                    KeyEventKind::Press => Some(Action::PlayerKeyDown(movement)),
+                    KeyEventKind::Release => Some(Action::PlayerKeyUp(movement)),
+                    KeyEventKind::Repeat => None,
+                };
+            }
+        }
         if key.kind == KeyEventKind::Release {
+            return None;
+        }
+        if key.kind == KeyEventKind::Repeat
+            && key.code != KeyCode::Char(' ')
+            && self.mode == KeyboardMode::Held
+        {
             return None;
         }
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
@@ -223,12 +259,23 @@ impl Component<Action> for Playfield {
         let player_visible = !matches!(state.phase, Phase::Respawning | Phase::GameOver)
             && (state.player.invulnerable == 0 || (state.tick / 5).is_multiple_of(2));
         if player_visible {
-            draw(
-                SpriteId::Player,
-                state.player.x,
-                PLAYER_Y,
-                0,
-                (state.player.invulnerable > 0).then_some(rgb(sprites::CYAN)),
+            let (w, _) = layout.size.alien_bounds();
+            let x = i32::from(layout.board.x)
+                + (state.player.x * POSITION_SCALE + state.player.motion_fraction) * i32::from(w)
+                    / (5 * POSITION_SCALE);
+            let (_, y) = layout.point(state.player.x, PLAYER_Y);
+            SpriteComponent.render(
+                frame,
+                area,
+                SpriteProps {
+                    atlas,
+                    id: SpriteId::Player,
+                    size: layout.size,
+                    frame: 0,
+                    x,
+                    y,
+                    tint: (state.player.invulnerable > 0).then_some(rgb(sprites::CYAN)),
+                },
             );
         }
         for shield in &state.shields {
@@ -508,7 +555,7 @@ impl GameUi {
                 layout,
             },
         );
-        Controls.render(
+        Controls::default().render(
             frame,
             Rect::new(area.x, layout.board.bottom(), area.width, 1),
             state,
