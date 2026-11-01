@@ -9,7 +9,12 @@ Random TUI projects, probably built with [tui-dispatch](https://github.com/dmk/t
 ### [game-of-life](./game-of-life)
 Conway's Game of Life: age-colored cells, fading trails, pattern planting, and replayable experiments
 
-<img src="./assets/screens/game-of-life.png" width="600" alt="Life cellular observatory">
+<img src="./assets/screens/game-of-life.png" width="400" alt="Life cellular observatory">
+
+### [space-invaders](./space-invaders)
+Well, space invaders. Probably best played in ghostty for better key responsiveness.
+
+<img src="./assets/screens/space-invaders.png" width="400" alt="Space Invaders">
 
 ### [weather](./weather)
 Terminal weather app using Open-Meteo API
