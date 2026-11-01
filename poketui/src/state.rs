@@ -63,7 +63,6 @@ pub struct PartyMember {
 pub enum ItemKind {
     Potion,
     SuperPotion,
-    PokeBall,
 }
 
 impl ItemKind {
@@ -71,7 +70,6 @@ impl ItemKind {
         match self {
             ItemKind::Potion => "Potion",
             ItemKind::SuperPotion => "Super Potion",
-            ItemKind::PokeBall => "Poke Ball",
         }
     }
 
@@ -79,7 +77,6 @@ impl ItemKind {
         match self {
             ItemKind::Potion => 20,
             ItemKind::SuperPotion => 50,
-            ItemKind::PokeBall => 0,
         }
     }
 }
@@ -299,10 +296,11 @@ pub struct PauseMenuState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum BattleStage {
     Intro,
-    Menu,
+    Waiting,
+    CommandMenu,
     ItemMenu,
-    PlayerCombo,
-    EnemyTurn,
+    EnemyTargetMenu,
+    AllyTargetMenu,
     Victory,
     Escape,
     Defeat,
@@ -314,84 +312,127 @@ pub enum BattleKind {
     Boss,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub enum BattleActor {
+    Party(usize),
+    Enemy(usize),
+}
+
+impl Default for BattleActor {
+    fn default() -> Self {
+        BattleActor::Party(0)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub enum PendingActionKind {
+    Fight,
+    Item { kind: ItemKind },
+    AbilityDamage { power: u16 },
+    AbilityHeal { amount: u16 },
+    AbilityGuard { reduction_pct: u8 },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct PendingAction {
+    #[serde(default)]
+    pub actor: BattleActor,
+    pub kind: PendingActionKind,
+    #[serde(default)]
+    pub ability_name: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct BattlePartyState {
+    pub member_index: usize,
+    pub hp: u16,
+    pub hp_max: u16,
+    #[serde(default)]
+    pub atb: u16,
+    #[serde(default)]
+    pub ready: bool,
+    #[serde(default)]
+    pub guard_pct: u8,
+    #[serde(default)]
+    pub guard_active: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct BattleEnemyState {
+    pub enemy_index: usize,
+    pub species: String,
+    pub level: u8,
+    pub hp: u16,
+    pub hp_max: u16,
+    #[serde(default)]
+    pub atb: u16,
+    #[serde(default)]
+    pub ready: bool,
+    #[serde(default)]
+    pub defeated: bool,
+    #[serde(default)]
+    pub attack: u16,
+    #[serde(default)]
+    pub defense: u16,
+    #[serde(default)]
+    pub speed: u16,
+    #[serde(default = "default_base_experience")]
+    pub base_experience: u16,
+    #[serde(default)]
+    pub info_loaded: bool,
+    #[serde(default)]
+    pub info_loading: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct BattleState {
     pub stage: BattleStage,
     #[serde(default = "default_battle_kind")]
     pub kind: BattleKind,
-    pub enemy_name: String,
-    #[serde(default = "default_enemy_level")]
-    pub enemy_level: u8,
-    pub player_hp: u16,
-    pub player_hp_max: u16,
-    pub enemy_hp: u16,
-    pub enemy_hp_max: u16,
+    pub enemies: Vec<BattleEnemyState>,
+    pub party: Vec<BattlePartyState>,
+    #[serde(default)]
     pub menu_index: usize,
     #[serde(default)]
     pub item_index: usize,
     #[serde(default)]
-    pub combo_hits: Vec<ComboHit>,
+    pub enemy_target_index: usize,
     #[serde(default)]
-    pub guard_pct: u8,
+    pub ally_target_index: usize,
     #[serde(default)]
-    pub guard_turns: u8,
+    pub ready_queue: Vec<BattleActor>,
     #[serde(default)]
-    pub captured: bool,
+    pub current_actor: Option<BattleActor>,
+    #[serde(default)]
+    pub pending_action: Option<PendingAction>,
+    #[serde(default)]
+    pub run_attempts: u8,
     pub message: String,
-    pub pending_enemy_damage: Option<u16>,
 }
 
 impl BattleState {
     pub fn new(
-        enemy_name: String,
-        enemy_level: u8,
-        player_hp_max: u16,
-        player_hp: u16,
         kind: BattleKind,
+        enemies: Vec<BattleEnemyState>,
+        party: Vec<BattlePartyState>,
+        message: String,
     ) -> Self {
         Self {
             stage: BattleStage::Intro,
             kind,
-            enemy_name,
-            enemy_level,
-            player_hp: player_hp.min(player_hp_max),
-            player_hp_max,
-            enemy_hp: 1,
-            enemy_hp_max: 1,
+            enemies,
+            party,
             menu_index: 0,
             item_index: 0,
-            combo_hits: Vec::new(),
-            guard_pct: 0,
-            guard_turns: 0,
-            captured: false,
-            message: "A wild Pokemon appeared!".to_string(),
-            pending_enemy_damage: None,
+            enemy_target_index: 0,
+            ally_target_index: 0,
+            ready_queue: Vec::new(),
+            current_actor: None,
+            pending_action: None,
+            run_attempts: 0,
+            message,
         }
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub enum TurnActor {
-    Player { member_index: usize },
-    Enemy,
-}
-
-impl Default for TurnActor {
-    fn default() -> Self {
-        TurnActor::Player { member_index: 0 }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct ComboHit {
-    #[serde(default)]
-    pub actor: TurnActor,
-    pub name: String,
-    pub damage: u16,
-    #[serde(default)]
-    pub ability_name: Option<String>,
-    #[serde(default)]
-    pub ability_damage: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -444,9 +485,15 @@ pub struct AppState {
     pub defeat_counts: HashMap<String, u16>,
     #[serde(default)]
     pub pickups: Vec<Pickup>,
+    #[serde(default)]
+    pub enemy_info_cache: HashMap<String, PokemonInfo>,
     pub enemy_info: Option<PokemonInfo>,
     pub player_sprite: SpriteState,
     pub enemy_sprite: SpriteState,
+    #[serde(default)]
+    pub enemy_sprites: Vec<SpriteState>,
+    #[serde(default)]
+    pub enemy_sprite_loading_species: Option<String>,
     pub battle: Option<BattleState>,
     pub menu: Option<MenuState>,
     pub pokemon_select: Option<PokemonSelectState>,
@@ -492,9 +539,12 @@ impl AppState {
             fired_event_ids: HashSet::new(),
             defeat_counts: HashMap::new(),
             pickups: Vec::new(),
+            enemy_info_cache: HashMap::new(),
             enemy_info: None,
             player_sprite: SpriteState::default(),
             enemy_sprite: SpriteState::default(),
+            enemy_sprites: Vec::new(),
+            enemy_sprite_loading_species: None,
             battle: None,
             menu: Some(MenuState {
                 selected: 0,
@@ -582,12 +632,17 @@ impl DebugState for AppState {
         ];
 
         if let Some(battle) = &self.battle {
+            let enemy_summary: Vec<String> = battle
+                .enemies
+                .iter()
+                .map(|enemy| format!("{}:{}/{}", enemy.species, enemy.hp, enemy.hp_max))
+                .collect();
             sections.push(
                 DebugSection::new("Battle")
                     .entry("stage", ron_string(&battle.stage))
-                    .entry("enemy", ron_string(&battle.enemy_name))
-                    .entry("player_hp", ron_string(&battle.player_hp))
-                    .entry("enemy_hp", ron_string(&battle.enemy_hp)),
+                    .entry("current_actor", ron_string(&battle.current_actor))
+                    .entry("ready_queue", ron_string(&battle.ready_queue))
+                    .entry("enemies", ron_string(&enemy_summary)),
             );
         }
 
@@ -628,10 +683,6 @@ fn default_battle_kind() -> BattleKind {
     BattleKind::Wild
 }
 
-fn default_enemy_level() -> u8 {
-    5
-}
-
 fn default_player_level() -> u8 {
     5
 }
@@ -657,10 +708,6 @@ fn default_inventory() -> Vec<ItemStack> {
         ItemStack {
             kind: ItemKind::SuperPotion,
             qty: 1,
-        },
-        ItemStack {
-            kind: ItemKind::PokeBall,
-            qty: 5,
         },
     ]
 }

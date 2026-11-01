@@ -92,9 +92,7 @@ impl<W: Write> Backend for SpriteBackend<W> {
                 None => {
                     queue!(self.inner, Print(format!("\x1b_Ga=d,d=i,i={id}\x1b\\")))?;
                 }
-                Some(cur)
-                    if cur.x != prev.x || cur.y != prev.y || cur.data != prev.data =>
-                {
+                Some(cur) if cur.x != prev.x || cur.y != prev.y || cur.data != prev.data => {
                     queue!(self.inner, Print(format!("\x1b_Ga=d,d=i,i={id}\x1b\\")))?;
                 }
                 _ => {}

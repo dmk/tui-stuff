@@ -1,0 +1,150 @@
+# Space Invaders
+
+A tiny Unicode arcade game built with **tui-dispatch 0.7.1**, **Artbox 0.2**,
+and **Ratatui 0.30**. A classic 55-alien formation, destructible half-cell shields,
+a mystery saucer, three lives, and increasingly fast waves.
+
+```sh
+cargo run --manifest-path space-invaders/Cargo.toml
+```
+
+Run commands from the repository root. A terminal of at least **80×40** is
+required. **Sprite sizes adapt automatically**: 5×2, 7×3, or 11×4, choosing the
+largest variant that fits the entire board. Use `--sprite-size compact` to
+keep the original 5×2 silhouettes in a large terminal.
+Resize during play without resetting the game. Below the minimum size,
+simulation stops until the terminal is large enough again.
+
+| Key | Action |
+| --- | --- |
+| Enter | Launch; play again after game over |
+| ← / → or A / D | Move; terminal key repeat is supported |
+| Space | Fire; repeat is limited by the firing cooldown |
+| P / Escape | Pause or resume |
+| R | Restart with the original seed |
+| Q / Ctrl-C | Quit |
+| F12 | Inspect state, actions, and frame cells |
+
+Magenta squid score 30, cyan crabs 20, green octopuses 10. Saucers award a
+seeded 100–300 points. Shields block shots from either direction, including
+your own. Defeated ranks expose the next shooter in each column. A player hit
+costs one life, followed by a respawn delay and flashing invulnerability.
+An invasion reaching the ship ends the game immediately.
+
+The formation has **five rows of eleven**: one squid row, two crab rows, and
+two octopus rows, with four bunkers below. This restores the density of the
+classic game while keeping the three original tiny silhouettes. Taito's
+[history of Space Invaders](https://artsandculture.google.com/story/the-evolution-of-space-invaders/wAVxCu_0BaX0aw)
+documents the 5×11 formation. Both black-and-white and color editions exist;
+this game's palette is a terminal interpretation.
+
+## Timing and architecture
+
+One runtime interval subscription dispatches `Tick` every 20 ms. The reducer
+advances all gameplay, cooldowns, animations, respawn delays, and wave changes
+in fixed steps. It uses `NoEffect`: no entity tasks or sleep effects. Pause
+freezes simulation time, including timers and randomness.
+
+The full fleet takes 920 ms per step and accelerates in proportion to surviving
+aliens. It drops four vertical units only at screen edges. Enemy shots advance
+two units every three ticks, with at most three active shots. Later waves start
+lower using the arcade ROM's start-height sequence.
+
+Coordinates use a fixed 80×76 world (vertical units are half terminal rows).
+Collisions walk projectile paths in travel order, so thin shields and nearer
+targets intercept fast shots. All gameplay state and the random-generator
+state are serializable; the sprite atlas is separate.
+
+See [GAMEPLAY.md](GAMEPLAY.md) for sourced arcade specifications, terminal
+adaptations, and measured before/after pacing. The first fleet now has room to
+advance for over two minutes if left intact; that benchmark isolates invasion
+from player deaths caused by shots.
+
+Artbox renders hand-authored size variants and colors into cached grids. A
+diagonal gradient blends each sprite's bright highlights through its base color
+into deeper shadows. The richer palette has 15% softer contrast and blends across
+columns as well as rows. Bunkers shade from lime toward teal. Six-stage radial-gradient explosions expand
+from a white flash into a gold burst, orange sparks, and fading red embers over
+480 ms. The final ship's explosion finishes behind the game-over modal.
+A shared sprite component blits non-space cells into Ratatui for playfield
+entities, life icons, and title previews. Shields render their damaged pixel
+masks directly. The game uses Artbox's grid API without its older Ratatui
+integration. See [SPRITES.md](SPRITES.md) for the original sketches.
+
+Title, pause, game-over, and wave-clear popups use tui-dispatch's `Modal`
+component. Its backdrop dims the entire scene, including the HUD and controls,
+while the popup content stays bright.
+
+## Scripted debugging
+
+Replay files contain the same actions emitted by keyboard input, plus `Tick`
+and `GameAdvanceTicks(n)`. Fifty ticks equal one second of game time without
+sleeping. The live clock is disabled whenever actions are loaded or a single
+frame is requested. An interactive replay therefore stays frozen afterward
+unless more actions are supplied; normal play runs without `--debug-actions-in`.
+
+```json
+[
+  "GameStart",
+  {"PlayerMove": "Right"},
+  "PlayerFire",
+  {"GameAdvanceTicks": 50},
+  "PauseToggle"
+]
+```
+
+```sh
+cargo run --manifest-path space-invaders/Cargo.toml -- \
+  --debug-actions-in space-invaders/scenarios/fire.json \
+  --debug-render-once
+
+# Larger sprites, deterministic seed, and the resulting state snapshot:
+cargo run --manifest-path space-invaders/Cargo.toml -- \
+  --seed 123 --width 176 --height 78 --sprite-size auto \
+  --debug-actions-in space-invaders/scenarios/formation.json \
+  --debug-render-once --debug-state-out /tmp/invaders-state.json
+
+# Inspect an alien explosion in mid-burst:
+cargo run --manifest-path space-invaders/Cargo.toml -- \
+  --debug-actions-in space-invaders/scenarios/explosion.json \
+  --debug-render-once
+
+# Record every action, including ticks, then replay to inspect the final frame:
+cargo run --manifest-path space-invaders/Cargo.toml -- \
+  --debug-actions-out /tmp/invaders-actions.json
+cargo run --manifest-path space-invaders/Cargo.toml -- \
+  --debug-actions-in /tmp/invaders-actions.json --debug-render-once
+
+# Export the state and action/replay schemas:
+cargo run --manifest-path space-invaders/Cargo.toml -- \
+  --debug-render-once \
+  --debug-state-schema-out /tmp/invaders-state-schema.json \
+  --debug-actions-schema-out /tmp/invaders-actions-schema.json
+```
+
+Use `--debug-state-in PATH` to resume a saved snapshot. `--seed` defaults to
+`1523456941`; a loaded snapshot supplies its own seed. Headless dimensions
+default to 80×40; interactive play uses the real terminal dimensions.
+Render-once prints a plain-text frame, so colors are verified separately using
+Ratatui buffer styles. A normal terminal displays the Artbox colors.
+
+The framework's `_await` and `_await_any` markers are retained for headless
+replays; they wait for dispatched action names, not elapsed time. There is no
+external asynchronous work in this version. `scenarios/await-start.json`
+demonstrates an action wait; use `GameAdvanceTicks` for game-time waits.
+
+Action recordings include `Tick` by default to preserve exact simulation
+timing. Explicit debug include/exclude filters override this behavior;
+filtering ticks out prevents exact replay. `ViewportResize { width, height }`
+is also an action so a recording preserves periods of resize suspension.
+
+## Checks
+
+```sh
+cargo fmt --manifest-path space-invaders/Cargo.toml --check
+cargo test --manifest-path space-invaders/Cargo.toml
+cargo clippy --manifest-path space-invaders/Cargo.toml --all-targets -- -D warnings
+```
+
+Tests exercise gameplay, virtual timer timing, deterministic state/replay,
+headless CLI runs, all three sprite sizes, color styles, and small terminals.

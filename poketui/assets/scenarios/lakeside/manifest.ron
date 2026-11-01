@@ -23,7 +23,6 @@
     pool: [
       (kind: Potion, weight: 5, qty: 1),
       (kind: SuperPotion, weight: 2, qty: 1),
-      (kind: PokeBall, weight: 4, qty: 2),
     ],
   ),
   abilities: [

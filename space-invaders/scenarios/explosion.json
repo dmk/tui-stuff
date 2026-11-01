@@ -1,0 +1,5 @@
+[
+  "GameStart",
+  "PlayerFire",
+  {"GameAdvanceTicks": 25}
+]

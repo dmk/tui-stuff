@@ -35,8 +35,9 @@ const CELL_ASPECT: f32 = 2.0;
 const MAP_TILES_V: u16 = 9;
 
 const SPRITE_ID_PLAYER_MAP: u32 = 2;
-const SPRITE_ID_ENEMY_BATTLE: u32 = 3;
+const SPRITE_ID_ENEMY_BASE: u32 = 300;
 const SPRITE_ID_PARTY_BASE: u32 = 40;
+const ATB_MAX: u16 = 1000;
 
 // Tile colors
 const TILE_GRASS: Color = Color::Rgb(34, 112, 58);
@@ -286,9 +287,16 @@ fn handle_battle_key(key: KeyEvent, state: &AppState) -> EventOutcome<Action> {
         return EventOutcome::ignored();
     };
 
-    if battle.stage == BattleStage::ItemMenu {
+    if matches!(
+        battle.stage,
+        BattleStage::CommandMenu
+            | BattleStage::ItemMenu
+            | BattleStage::EnemyTargetMenu
+            | BattleStage::AllyTargetMenu
+    ) {
         let action = match key.code {
-            KeyCode::Esc => Some(Action::BattleItemCancel),
+            KeyCode::Esc if battle.stage == BattleStage::ItemMenu => Some(Action::BattleItemCancel),
+            KeyCode::Esc => Some(Action::PauseOpen),
             KeyCode::Enter | KeyCode::Char('z') | KeyCode::Char('Z') => Some(Action::BattleConfirm),
             KeyCode::Up | KeyCode::Left => Some(Action::BattleMenuPrev),
             KeyCode::Down | KeyCode::Right => Some(Action::BattleMenuNext),
@@ -305,14 +313,6 @@ fn handle_battle_key(key: KeyEvent, state: &AppState) -> EventOutcome<Action> {
         KeyCode::Enter | KeyCode::Char('z') | KeyCode::Char('Z')
     ) {
         return EventOutcome::action(Action::BattleConfirm);
-    }
-    if battle.stage == BattleStage::Menu {
-        let action = match key.code {
-            KeyCode::Up | KeyCode::Left => Some(Action::BattleMenuPrev),
-            KeyCode::Down | KeyCode::Right => Some(Action::BattleMenuNext),
-            _ => None,
-        };
-        return EventOutcome::from(action);
     }
     EventOutcome::ignored()
 }
@@ -771,7 +771,6 @@ fn render_overworld_panel(frame: &mut Frame, area: Rect, state: &AppState) {
     let exp_current = state.exp_progress();
     let exp_next = state.exp_to_next_level().max(1);
     let party_count = state.party.len();
-    let balls = pokeball_count(state);
     let bag_summary = bag_summary(state);
     let lines = vec![
         Line::from(Span::styled(
@@ -790,13 +789,10 @@ fn render_overworld_panel(frame: &mut Frame, area: Rect, state: &AppState) {
             Style::default().fg(TEXT_MAIN),
         )),
         Line::from(Span::styled(
-            format!("Balls: x{}", balls),
+            format!("Items: {}", bag_summary),
             Style::default().fg(TEXT_MAIN),
         )),
-        Line::from(Span::styled(
-            format!("Bag: {}", bag_summary),
-            Style::default().fg(TEXT_DIM),
-        )),
+        Line::from(""),
         if state.boss_defeated {
             Line::from(Span::styled(
                 "Demo complete!",
@@ -1008,7 +1004,6 @@ fn render_overworld_status(frame: &mut Frame, area: Rect, state: &AppState, show
         let exp_next = state.exp_to_next_level().max(1);
         let bag_summary = bag_summary(state);
         let party_count = state.party.len();
-        let balls = pokeball_count(state);
         let bar_width = if area.width >= 80 { 26 } else { 16 };
         let layout = Layout::default()
             .direction(Direction::Vertical)
@@ -1025,10 +1020,10 @@ fn render_overworld_status(frame: &mut Frame, area: Rect, state: &AppState, show
             ),
             meter_line("EXP", exp_current, exp_next, bar_width, ACCENT_GOLD),
             Line::from(format!(
-                "Steps {}  |  Party {}/3  |  Balls x{}",
-                state.player.steps, party_count, balls
+                "Steps {}  |  Party {}/3",
+                state.player.steps, party_count
             )),
-            Line::from(format!("Bag {}", bag_summary)),
+            Line::from(format!("Items {}", bag_summary)),
             if state.boss_defeated {
                 Line::from(Span::styled(
                     "Demo complete!",
@@ -1097,137 +1092,294 @@ fn render_battle(frame: &mut Frame, area: Rect, state: &AppState) {
 }
 
 fn render_enemy_panel(frame: &mut Frame, area: Rect, state: &AppState) {
-    let enemy_name = state
+    let title = state
         .battle
         .as_ref()
-        .map(|battle| format_name(&battle.enemy_name))
-        .unwrap_or_else(|| "Enemy".to_string());
-    let is_boss = state
-        .battle
-        .as_ref()
-        .map(|battle| battle.kind == crate::state::BattleKind::Boss)
-        .unwrap_or(false);
-    let title = if is_boss {
-        format!(" BOSS {} ", enemy_name.to_ascii_uppercase())
-    } else {
-        format!(" WILD {} ", enemy_name.to_ascii_uppercase())
-    };
+        .map(|battle| {
+            let alive = battle
+                .enemies
+                .iter()
+                .filter(|enemy| !enemy.defeated && enemy.hp > 0)
+                .count();
+            let total = battle.enemies.len();
+            if battle.kind == crate::state::BattleKind::Boss {
+                format!(" BOSS ENEMIES {alive}/{total} ")
+            } else {
+                format!(" ENEMIES {alive}/{total} ")
+            }
+        })
+        .unwrap_or_else(|| " ENEMIES ".to_string());
     let block = panel_block(title.as_str(), BG_PANEL_ALT);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    // Stats on left (narrow), sprite on right (wide)
+    let stats_height = state
+        .battle
+        .as_ref()
+        .map(|battle| {
+            let wanted = battle.enemies.len().saturating_add(2) as u16;
+            let max_stats = inner.height.saturating_sub(3).max(3);
+            wanted.max(3).min(max_stats)
+        })
+        .unwrap_or(4);
     let layout = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(22), Constraint::Min(10)])
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(stats_height), Constraint::Min(3)])
         .split(inner);
     render_enemy_stats(frame, layout[0], state);
-    render_enemy_sprite(frame, layout[1], state);
+    if layout.len() > 1 {
+        render_enemy_sprite(frame, layout[1], state);
+    }
+}
+
+fn selected_enemy_target_index(battle: &crate::state::BattleState) -> Option<usize> {
+    if battle.stage != BattleStage::EnemyTargetMenu {
+        return None;
+    }
+    let living: Vec<usize> = battle
+        .enemies
+        .iter()
+        .filter(|enemy| !enemy.defeated && enemy.hp > 0)
+        .map(|enemy| enemy.enemy_index)
+        .collect();
+    living
+        .get(
+            battle
+                .enemy_target_index
+                .min(living.len().saturating_sub(1)),
+        )
+        .copied()
 }
 
 fn render_enemy_stats(frame: &mut Frame, area: Rect, state: &AppState) {
     let Some(battle) = state.battle.as_ref() else {
         return;
     };
-    let bar_width = area.width.saturating_sub(6).min(16).max(8) as usize;
-    let lines = vec![
-        hp_line_scaled(battle.enemy_hp, battle.enemy_hp_max, bar_width),
-        Line::from(Span::styled(
-            format!("Lv {}", battle.enemy_level),
+    let selected_enemy = selected_enemy_target_index(battle);
+    let hp_bar_w = 10usize;
+    let atb_bar_w = 6usize;
+    let mut lines = Vec::new();
+    for enemy in &battle.enemies {
+        let hp_bar = compact_bar(enemy.hp as u32, enemy.hp_max as u32, hp_bar_w);
+        let atb_bar = compact_bar(enemy.atb as u32, ATB_MAX as u32, atb_bar_w);
+        let mut label = format!(
+            "{}{} Lv{} HP{} {}/{} TURN{} {}",
+            if selected_enemy == Some(enemy.enemy_index) {
+                ">"
+            } else {
+                " "
+            },
+            format_name(&enemy.species),
+            enemy.level,
+            hp_bar,
+            enemy.hp,
+            enemy.hp_max,
+            atb_bar,
+            atb_pct(enemy.atb)
+        );
+        if enemy.defeated || enemy.hp == 0 {
+            label.push_str(" KO");
+        }
+        let style = if selected_enemy == Some(enemy.enemy_index) {
+            Style::default()
+                .fg(ACCENT_GREEN)
+                .add_modifier(Modifier::BOLD)
+        } else if enemy.defeated || enemy.hp == 0 {
+            Style::default().fg(Color::Rgb(204, 118, 118))
+        } else {
+            Style::default().fg(TEXT_MAIN)
+        };
+        lines.push(Line::from(Span::styled(label, style)));
+    }
+    if lines.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "No enemies.",
             Style::default().fg(TEXT_DIM),
-        )),
-    ];
-    let paragraph = Paragraph::new(Text::from(lines)).style(Style::default().fg(TEXT_MAIN));
-    frame.render_widget(paragraph, area);
+        )));
+    }
+    frame.render_widget(
+        Paragraph::new(Text::from(lines)).style(Style::default().fg(TEXT_MAIN)),
+        area,
+    );
 }
 
 fn render_enemy_sprite(frame: &mut Frame, area: Rect, state: &AppState) {
-    if state
-        .battle
-        .as_ref()
-        .map(|battle| battle.captured)
-        .unwrap_or(false)
-    {
+    let Some(battle) = state.battle.as_ref() else {
+        return;
+    };
+    if area.width == 0 || area.height == 0 || battle.enemies.is_empty() {
         return;
     }
-    if let Some(sprite) = state.enemy_sprite.sprite.as_ref() {
-        let (cols, rows) = sprite_fit(sprite, area.width, area.height.saturating_sub(1));
-        let sprite_frame = sprite.frame(state.enemy_sprite.frame_index);
-        if let Ok(sequence) =
-            sprite::kitty_sequence(sprite_frame, cols, rows, SPRITE_ID_ENEMY_BATTLE)
-        {
-            // Center horizontally, align to bottom
-            let offset_x = area.x.saturating_add(area.width.saturating_sub(cols) / 2);
-            let offset_y = area.y.saturating_add(area.height.saturating_sub(rows));
-            sprite_backend::set_sprite(SPRITE_ID_ENEMY_BATTLE, offset_x, offset_y, sequence);
-            return;
+
+    let selected_enemy = selected_enemy_target_index(battle);
+    let slots = battle.enemies.len().max(1);
+    let slot_width = (area.width / slots as u16).max(1);
+    for (draw_idx, enemy) in battle.enemies.iter().enumerate() {
+        let slot_x = area.x + (draw_idx as u16 * slot_width);
+        let width = if draw_idx + 1 == slots {
+            area.x.saturating_add(area.width).saturating_sub(slot_x)
+        } else {
+            slot_width
+        };
+        let slot = Rect::new(slot_x, area.y, width.max(1), area.height);
+        let sprite_state = state
+            .enemy_sprites
+            .get(enemy.enemy_index)
+            .or_else(|| state.enemy_sprites.get(draw_idx));
+        let name_style = if selected_enemy == Some(enemy.enemy_index) {
+            Style::default()
+                .fg(ACCENT_GREEN)
+                .add_modifier(Modifier::BOLD)
+        } else if enemy.defeated || enemy.hp == 0 {
+            Style::default().fg(Color::Rgb(204, 118, 118))
+        } else {
+            Style::default().fg(TEXT_DIM)
+        };
+
+        let mut sprite_drawn = false;
+        if let Some(sprite_state) = sprite_state {
+            if let Some(sprite) = sprite_state.sprite.as_ref() {
+                let sprite_rows = slot.height.saturating_sub(1).max(1);
+                let (cols, rows) = sprite_fit_scaled(sprite, slot.width, sprite_rows, 0.92);
+                let frame_data = sprite.frame(sprite_state.frame_index);
+                if let Ok(sequence) = sprite::kitty_sequence(
+                    frame_data,
+                    cols,
+                    rows,
+                    SPRITE_ID_ENEMY_BASE + draw_idx as u32,
+                ) {
+                    let offset_x = slot.x.saturating_add(slot.width.saturating_sub(cols) / 2);
+                    let offset_y = slot
+                        .y
+                        .saturating_add(slot.height.saturating_sub(rows + 1).min(slot.height));
+                    sprite_backend::set_sprite(
+                        SPRITE_ID_ENEMY_BASE + draw_idx as u32,
+                        offset_x,
+                        offset_y,
+                        sequence,
+                    );
+                    sprite_drawn = true;
+                }
+            }
+        }
+
+        let label_y = slot.y.saturating_add(slot.height.saturating_sub(1));
+        let label = if enemy.defeated || enemy.hp == 0 {
+            format!("{} KO", format_name(&enemy.species))
+        } else {
+            format_name(&enemy.species)
+        };
+        frame.render_widget(
+            Paragraph::new(label)
+                .style(name_style)
+                .alignment(Alignment::Center),
+            Rect::new(slot.x, label_y, slot.width, 1),
+        );
+        if !sprite_drawn {
+            let loading = sprite_state.map(|sprite| sprite.loading).unwrap_or(false);
+            let fallback = if loading { "[loading]" } else { "[no sprite]" };
+            frame.render_widget(
+                Paragraph::new(fallback)
+                    .style(Style::default().fg(TEXT_DIM))
+                    .alignment(Alignment::Center),
+                Rect::new(
+                    slot.x,
+                    slot.y,
+                    slot.width,
+                    slot.height.saturating_sub(1).max(1),
+                ),
+            );
         }
     }
-
-    let content = if state.enemy_sprite.loading {
-        "[loading]"
-    } else {
-        "[no sprite]"
-    };
-    let paragraph = Paragraph::new(content)
-        .style(Style::default().fg(TEXT_DIM))
-        .alignment(Alignment::Center);
-    frame.render_widget(paragraph, area);
 }
 
 fn render_player_panel(frame: &mut Frame, area: Rect, state: &AppState) {
-    let player_name = format_name(&state.player_name());
-    let title = format!(" {} ", player_name.to_ascii_uppercase());
-    let block = panel_block(title.as_str(), BG_PANEL);
+    let title = " PARTY ";
+    let block = panel_block(title, BG_PANEL);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    let stats_height = (state.party.len() as u16 + 2)
+        .max(3)
+        .min(inner.height.saturating_sub(3).max(3));
     let layout = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(10), Constraint::Length(22)])
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(stats_height), Constraint::Min(3)])
         .split(inner);
-    render_party_sprite_strip(
-        frame,
-        layout[0],
-        state,
-        BG_PANEL,
-        SPRITE_ID_PARTY_BASE + 20,
-        0.88,
-        1.12,
-        true,
-    );
-    render_player_stats(frame, layout[1], state);
+    render_player_stats(frame, layout[0], state);
+    if layout.len() > 1 {
+        render_party_sprite_strip(
+            frame,
+            layout[1],
+            state,
+            BG_PANEL,
+            SPRITE_ID_PARTY_BASE + 20,
+            0.88,
+            1.05,
+            false,
+        );
+    }
 }
 
 fn render_player_stats(frame: &mut Frame, area: Rect, state: &AppState) {
-    let (current, max) = state
-        .battle
-        .as_ref()
-        .map(|battle| (battle.player_hp, battle.player_hp_max))
-        .unwrap_or((state.player_max_hp(), state.player_max_hp()));
-    let bar_width = area.width.saturating_sub(6).min(16).max(8) as usize;
-    let mut lines = vec![
-        hp_line_scaled(current, max, bar_width),
-        Line::from(Span::styled(
-            format!("Lv {}", state.active_level()),
-            Style::default().fg(TEXT_DIM),
-        )),
-    ];
-    if let Some(member) = state.active_member() {
-        if member.ability_cd > 0 {
-            lines.push(Line::from(Span::styled(
-                format!("Ability CD: {}", member.ability_cd),
-                Style::default().fg(TEXT_DIM),
-            )));
+    let Some(battle) = state.battle.as_ref() else {
+        return;
+    };
+    let selected_ally = if battle.stage == BattleStage::AllyTargetMenu {
+        let living: Vec<usize> = battle
+            .party
+            .iter()
+            .filter(|slot| slot.hp > 0)
+            .map(|slot| slot.member_index)
+            .collect();
+        living
+            .get(battle.ally_target_index.min(living.len().saturating_sub(1)))
+            .copied()
+    } else {
+        None
+    };
+    let mut lines = Vec::new();
+    for slot in &battle.party {
+        let member = state.party.get(slot.member_index);
+        let name = member
+            .map(|member| format_name(&member.info.name))
+            .unwrap_or_else(|| format!("Member {}", slot.member_index + 1));
+        let cooldown = member.map(|member| member.ability_cd).unwrap_or(0);
+        let mut flags = Vec::new();
+        if cooldown > 0 {
+            flags.push(format!("CD{}", cooldown));
         }
-    }
-    if let Some(battle) = state.battle.as_ref() {
-        if battle.guard_turns > 0 && battle.guard_pct > 0 {
-            lines.push(Line::from(Span::styled(
-                format!("Guard -{}% ({}t)", battle.guard_pct, battle.guard_turns),
-                Style::default().fg(ACCENT_GOLD),
-            )));
+        if slot.guard_active && slot.guard_pct > 0 {
+            flags.push(format!("DEF{}%", slot.guard_pct));
         }
+        let flag_text = if flags.is_empty() {
+            "".to_string()
+        } else {
+            format!(" {}", flags.join(" "))
+        };
+        let label = format!(
+            "{}{} HP {}/{} TURN {}{}",
+            if slot.member_index == state.active_party_index {
+                ">"
+            } else {
+                " "
+            },
+            name,
+            slot.hp,
+            slot.hp_max,
+            atb_pct(slot.atb),
+            flag_text
+        );
+        let style = if slot.hp == 0 {
+            Style::default().fg(Color::Rgb(204, 118, 118))
+        } else if selected_ally == Some(slot.member_index) {
+            Style::default()
+                .fg(ACCENT_GREEN)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(TEXT_MAIN)
+        };
+        lines.push(Line::from(Span::styled(label, style)));
     }
     let paragraph = Paragraph::new(Text::from(lines)).style(Style::default().fg(TEXT_MAIN));
     frame.render_widget(paragraph, area);
@@ -1261,10 +1413,20 @@ fn render_battle_command(frame: &mut Frame, area: Rect, state: &AppState) {
 
 fn render_battle_prompt(frame: &mut Frame, area: Rect, battle: &crate::state::BattleState) {
     let mut lines = Vec::new();
-    if matches!(battle.stage, BattleStage::Menu | BattleStage::ItemMenu) {
+    if matches!(
+        battle.stage,
+        BattleStage::CommandMenu
+            | BattleStage::ItemMenu
+            | BattleStage::EnemyTargetMenu
+            | BattleStage::AllyTargetMenu
+    ) {
         lines.push(Line::from(Span::styled(
             battle.message.clone(),
             Style::default().fg(TEXT_MAIN),
+        )));
+        lines.push(Line::from(Span::styled(
+            "TURN gauge (ATB) pauses while menu is open.",
+            Style::default().fg(TEXT_DIM),
         )));
         lines.push(Line::from(Span::styled(
             "Arrows/WASD: Navigate",
@@ -1281,9 +1443,22 @@ fn render_battle_prompt(frame: &mut Frame, area: Rect, battle: &crate::state::Ba
                 Style::default().fg(TEXT_DIM),
             )));
         }
+    } else if battle.stage == BattleStage::Waiting {
+        lines.push(Line::from(Span::styled(
+            battle.message.clone(),
+            Style::default().fg(TEXT_MAIN),
+        )));
+        lines.push(Line::from(Span::styled(
+            "Turn gauges filling...",
+            Style::default().fg(TEXT_DIM),
+        )));
+        lines.push(Line::from(Span::styled(
+            "Esc: Pause",
+            Style::default().fg(TEXT_DIM),
+        )));
     } else {
         lines.push(Line::from(Span::styled(
-            "Resolving turn...",
+            battle.message.clone(),
             Style::default().fg(TEXT_DIM),
         )));
         lines.push(Line::from(Span::styled(
@@ -1304,8 +1479,11 @@ fn render_battle_actions(
     battle: &crate::state::BattleState,
 ) {
     let lines = match battle.stage {
-        BattleStage::Menu => battle_menu_lines(battle.menu_index, battle.kind),
+        BattleStage::CommandMenu => battle_menu_lines(battle.menu_index, battle.kind),
         BattleStage::ItemMenu => battle_item_lines(state, battle.item_index),
+        BattleStage::EnemyTargetMenu => battle_enemy_target_lines(state, battle.enemy_target_index),
+        BattleStage::AllyTargetMenu => battle_ally_target_lines(state, battle.ally_target_index),
+        BattleStage::Waiting => battle_waiting_lines(battle),
         _ => vec![Line::from(Span::styled(
             "Enter/Z: Continue",
             Style::default().fg(TEXT_DIM),
@@ -1318,10 +1496,10 @@ fn render_battle_actions(
 }
 
 fn battle_menu_lines(selected: usize, kind: BattleKind) -> Vec<Line<'static>> {
-    let options = ["FIGHT", "BAG", "CATCH", "ABILITY", "RUN"];
+    let options = ["FIGHT", "ITEM", "ABILITY", "DEFEND", "RUN"];
     let mut lines = Vec::new();
     for (idx, label) in options.iter().enumerate() {
-        let disabled = kind == BattleKind::Boss && (idx == 2 || idx == 4);
+        let disabled = kind == BattleKind::Boss && idx == 4;
         let style = if idx == selected {
             if disabled {
                 Style::default()
@@ -1344,42 +1522,93 @@ fn battle_menu_lines(selected: usize, kind: BattleKind) -> Vec<Line<'static>> {
     lines
 }
 
-fn battle_should_show_modal(battle: &crate::state::BattleState) -> bool {
-    !matches!(battle.stage, BattleStage::Menu | BattleStage::ItemMenu)
+fn battle_enemy_target_lines(state: &AppState, selected: usize) -> Vec<Line<'static>> {
+    let Some(battle) = state.battle.as_ref() else {
+        return vec![];
+    };
+    let targets: Vec<_> = battle
+        .enemies
+        .iter()
+        .filter(|enemy| !enemy.defeated && enemy.hp > 0)
+        .collect();
+    if targets.is_empty() {
+        return vec![Line::from(Span::styled(
+            "No enemies.",
+            Style::default().fg(TEXT_DIM),
+        ))];
+    }
+    targets
+        .iter()
+        .enumerate()
+        .map(|(idx, enemy)| {
+            let label = format!(
+                "{} Lv{} HP {}/{}",
+                format_name(&enemy.species),
+                enemy.level,
+                enemy.hp,
+                enemy.hp_max
+            );
+            menu_line(&label, idx == selected)
+        })
+        .collect()
 }
 
-fn hp_line_scaled(current: u16, max: u16, width: usize) -> Line<'static> {
-    let width = width.max(6);
-    let ratio = if max == 0 {
-        0.0
-    } else {
-        current as f32 / max as f32
+fn battle_ally_target_lines(state: &AppState, selected: usize) -> Vec<Line<'static>> {
+    let Some(battle) = state.battle.as_ref() else {
+        return vec![];
     };
+    let targets: Vec<_> = battle.party.iter().filter(|slot| slot.hp > 0).collect();
+    if targets.is_empty() {
+        return vec![Line::from(Span::styled(
+            "No allies standing.",
+            Style::default().fg(TEXT_DIM),
+        ))];
+    }
+    targets
+        .iter()
+        .enumerate()
+        .map(|(idx, slot)| {
+            let name = state
+                .party
+                .get(slot.member_index)
+                .map(|member| format_name(&member.info.name))
+                .unwrap_or_else(|| format!("Member {}", slot.member_index + 1));
+            let label = format!("{} HP {}/{}", name, slot.hp, slot.hp_max);
+            menu_line(&label, idx == selected)
+        })
+        .collect()
+}
+
+fn battle_waiting_lines(battle: &crate::state::BattleState) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from(Span::styled(
+        "Waiting for turn gauges...",
+        Style::default().fg(TEXT_DIM),
+    ))];
+    lines.push(Line::from(Span::styled(
+        format!("Ready queue: {}", battle.ready_queue.len()),
+        Style::default().fg(TEXT_DIM),
+    )));
+    lines
+}
+
+fn battle_should_show_modal(battle: &crate::state::BattleState) -> bool {
+    matches!(
+        battle.stage,
+        BattleStage::Intro | BattleStage::Victory | BattleStage::Escape | BattleStage::Defeat
+    )
+}
+
+fn atb_pct(current: u16) -> String {
+    let pct = ((current as u32 * 100) / ATB_MAX as u32).min(100);
+    format!("{pct:>3}%")
+}
+
+fn compact_bar(current: u32, max: u32, width: usize) -> String {
+    let max = max.max(1);
+    let ratio = (current.min(max) as f32) / max as f32;
     let filled = ((ratio * width as f32).round() as usize).min(width);
     let empty = width.saturating_sub(filled);
-    let filled_bar = "█".repeat(filled);
-    let empty_bar = "░".repeat(empty);
-    let color = if ratio > 0.5 {
-        ACCENT_GREEN
-    } else if ratio > 0.2 {
-        ACCENT_GOLD
-    } else {
-        Color::Rgb(220, 96, 96)
-    };
-    let bar_bg = Color::Rgb(24, 32, 24);
-    let bar_bg_dim = Color::Rgb(20, 26, 20);
-    Line::from(vec![
-        Span::raw("HP "),
-        Span::styled(
-            filled_bar,
-            Style::default()
-                .fg(color)
-                .bg(bar_bg)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(empty_bar, Style::default().fg(TEXT_DIM).bg(bar_bg_dim)),
-        Span::raw(format!(" {}/{}", current, max)),
-    ])
+    format!("[{}{}]", "█".repeat(filled), "░".repeat(empty))
 }
 
 fn sprite_fit(sprite: &sprite::SpriteData, max_cols: u16, max_rows: u16) -> (u16, u16) {
@@ -1487,7 +1716,7 @@ fn battle_item_lines(state: &AppState, selected: usize) -> Vec<Line<'static>> {
 fn bag_summary(state: &AppState) -> String {
     let mut items = Vec::new();
     for stack in &state.inventory {
-        if stack.qty > 0 && stack.kind != crate::state::ItemKind::PokeBall {
+        if stack.qty > 0 {
             items.push(format!("{} x{}", stack.kind.label(), stack.qty));
         }
     }
@@ -1638,15 +1867,6 @@ fn render_party_sprite_strip(
             }
         }
     }
-}
-
-fn pokeball_count(state: &AppState) -> u16 {
-    state
-        .inventory
-        .iter()
-        .find(|stack| stack.kind == crate::state::ItemKind::PokeBall)
-        .map(|stack| stack.qty)
-        .unwrap_or(0)
 }
 
 fn format_name(name: &str) -> String {

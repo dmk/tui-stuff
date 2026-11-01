@@ -1,0 +1,6 @@
+[
+  "GameStart",
+  {"_await": "GameStart"},
+  "PlayerFire",
+  {"GameAdvanceTicks": 8}
+]

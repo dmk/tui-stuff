@@ -1,0 +1,7 @@
+[
+  "GameStart",
+  {"PlayerMove": "Right"},
+  "PlayerFire",
+  {"GameAdvanceTicks": 50},
+  "PauseToggle"
+]
