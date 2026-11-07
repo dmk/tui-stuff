@@ -1,4 +1,5 @@
 pub mod action;
+pub mod components;
 pub mod input;
 pub mod reducer;
 pub mod sprites;

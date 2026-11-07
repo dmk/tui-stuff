@@ -2,8 +2,11 @@
 
 A small cellular observatory for Conway's Game of Life, built with
 **tui-dispatch 0.7.1** and **Ratatui 0.30**. Mint newborns grow through teal and
-blue into gold; vanished cells leave a fading violet memory. A population
-sparkline tracks the last 80 generations.
+blue into gold; vanished cells leave a fading violet memory. A centered,
+borderless field uses the terminal background, with compact status and controls
+below it. A compact population chart sits between the field and status, showing
+the most recent generations. Help uses aligned controls and a compact pattern
+list in the same borderless modal style as Space Invaders and Minesweeper.
 
 <img src="../assets/screens/game-of-life.png" width="900" alt="Life's midnight garden, with age-colored cells and violet trails">
 
@@ -14,13 +17,20 @@ cargo run --manifest-path game-of-life/Cargo.toml
 Run commands from the repository root. The midnight garden opens running at
 8 generations per second. Press **Space** to pause, **1–6** to choose a pattern,
 then **R** to replace the world or **Enter** to stamp it at the cursor. **?**
-opens field notes with every control.
+opens help with every control.
 
 The world is **192×128 cells**, with wrapping edges by default. Pan to explore;
-three zoom levels use 1×1, 2×1, or 4×2 terminal cells per world cell. The default
-2×1 view makes cells approximately square. The pattern sidebar appears at
-105 columns. At least **60×22** is required; smaller windows suspend the clock
-without losing the world. Resizing changes the view, never the simulation grid.
+three zoom levels use 1×½, 2×1, or 4×2 terminal cells per world cell. At 1×,
+each cell is a Unicode half-block: two independent world rows share one
+terminal row, with separate age colors, trails, and cursor highlights. Mouse
+input at 1× targets the upper cell; arrow keys can select either half. The
+default 2×1 view makes cells approximately square. At 4× zoom, half-blocks draw a
+3×3 pixel square inside each 4×4 half-cell slot, leaving equal gutters and a
+single age gradient from top to bottom. Pattern shortcuts and controls live
+in the **?** help modal. The field centers in the window and caps its panel at
+100×40 terminal cells. At least **60×22** is required; smaller windows suspend
+the clock without losing the world. Resizing changes the view, never the
+simulation grid.
 
 ## Controls
 

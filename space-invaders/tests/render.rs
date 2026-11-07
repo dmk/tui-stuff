@@ -117,8 +117,15 @@ fn modal_dims_the_background_and_hud_but_keeps_its_content_bright() {
     state.phase = Phase::Paused;
     let (text, modal) = render(&state, 80, 40);
     assert!(text.contains("PAUSED"));
+    assert!(live.content.iter().all(|cell| cell.bg == Color::Reset));
+    assert!(modal
+        .content
+        .iter()
+        .any(|cell| cell.bg == Color::Rgb(35, 35, 45)));
+    assert!(!text.contains('╭'));
+
     // Header score, top squid rank, and footer all sit outside the modal.
-    for (x, y) in [(10, 0), (8, 4), (12, 39)] {
+    for (x, y) in [(0, 0), (8, 4), (12, 39)] {
         assert_eq!(live[(x, y)].symbol(), modal[(x, y)].symbol());
         let Color::Rgb(r, g, b) = live[(x, y)].fg else {
             panic!("expected RGB foreground");
@@ -131,7 +138,7 @@ fn modal_dims_the_background_and_hud_but_keeps_its_content_bright() {
     assert!(modal
         .content
         .iter()
-        .any(|cell| cell.symbol() == "P" && cell.fg == Color::Rgb(240, 245, 255)));
+        .any(|cell| cell.symbol() == "P" && cell.fg == Color::White));
 }
 
 #[test]

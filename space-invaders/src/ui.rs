@@ -1,30 +1,33 @@
 use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{
-    layout::Rect,
-    style::{Color, Style},
+    layout::{Constraint, Layout, Margin, Rect},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Paragraph},
     Frame,
 };
 use std::rc::Rc;
 use tui_dispatch::{Component, EventKind, EventOutcome};
-use tui_dispatch_components::{style::BorderStyle, Modal, ModalBehavior, ModalProps, ModalStyle};
+use tui_dispatch_components::{Modal, ModalBehavior, ModalProps, ModalStyle};
 
 use crate::{
     action::{Action, Direction, MovementKey},
+    components::{
+        sprite::{bounds, put},
+        AlienComponent, AlienProps, BulletComponent, BulletProps, ComponentRegistry,
+        ExplosionComponent, ExplosionProps, PlayerComponent, PlayerProps, SaucerComponent,
+        SaucerProps, ShieldComponent, ShieldProps,
+    },
     input::KeyboardMode,
     sprites::{self, SpriteAtlas, SpriteId, SpriteSize, SpriteSizing},
-    state::{
-        AlienKind, AppState, Owner, Phase, Shield, MIN_HEIGHT, MIN_WIDTH, PLAYER_Y, POSITION_SCALE,
-    },
+    state::{AppState, Phase, MIN_HEIGHT, MIN_WIDTH, PLAYER_Y, POSITION_SCALE},
 };
 
-const BACKGROUND: Color = Color::Rgb(8, 10, 17);
-const MUTED: Color = Color::Rgb(125, 142, 165);
+pub use crate::components::{BoardLayout, SpriteComponent, SpriteProps};
 
-fn rgb(value: (u8, u8, u8)) -> Color {
-    Color::Rgb(value.0, value.1, value.2)
-}
+// Use the terminal's own background, including light themes.
+const BACKGROUND: Color = Color::Reset;
+const MUTED: Color = Color::Rgb(125, 142, 165);
 
 pub fn map_event(event: &EventKind, state: &AppState) -> EventOutcome<Action> {
     map_event_with_mode(event, state, KeyboardMode::Legacy)
@@ -46,93 +49,8 @@ pub fn map_event_with_mode(
     EventOutcome::from_actions(component.handle_event(event, state))
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct BoardLayout {
-    pub size: SpriteSize,
-    pub board: Rect,
-}
-
-impl BoardLayout {
-    pub fn fit(area: Rect) -> Option<Self> {
-        Self::with_sizing(area, SpriteSizing::Auto)
-    }
-
-    pub fn with_sizing(area: Rect, sizing: SpriteSizing) -> Option<Self> {
-        let fitted = SpriteSize::fit(area.width, area.height)?;
-        let size = match sizing {
-            SpriteSizing::Compact => SpriteSize::Small,
-            SpriteSizing::Auto => fitted,
-        };
-        let (width, height) = size.board_bounds();
-        Some(Self {
-            size,
-            board: Rect::new(
-                area.x + (area.width - width) / 2,
-                area.y + (area.height - height - 2) / 2 + 1,
-                width,
-                height,
-            ),
-        })
-    }
-
-    pub fn point(self, x: i32, y: i32) -> (i32, i32) {
-        let (w, h) = self.size.alien_bounds();
-        (
-            i32::from(self.board.x) + (x * i32::from(w)).div_euclid(5),
-            i32::from(self.board.y) + (y * i32::from(h)).div_euclid(4),
-        )
-    }
-}
-
-pub struct SpriteProps<'a> {
-    pub atlas: &'a SpriteAtlas,
-    pub id: SpriteId,
-    pub size: SpriteSize,
-    pub frame: usize,
-    pub x: i32,
-    pub y: i32,
-    pub tint: Option<Color>,
-}
-
-/// Used by the playfield, HUD life icons, and title previews.
-pub struct SpriteComponent;
-
-impl Component<Action> for SpriteComponent {
-    type Props<'a> = SpriteProps<'a>;
-
-    fn render(&mut self, frame: &mut Frame, area: Rect, props: SpriteProps<'_>) {
-        let sprite = props.atlas.get(props.id, props.size, props.frame);
-        for (row, cells) in sprite.chars.iter().enumerate() {
-            for (column, value) in cells.iter().enumerate() {
-                if value.ch == ' ' {
-                    continue;
-                }
-                let color = props
-                    .tint
-                    .or_else(|| value.fg.map(|c| Color::Rgb(c.r, c.g, c.b)));
-                put(
-                    frame,
-                    area,
-                    props.x + column as i32,
-                    props.y + row as i32,
-                    value.ch,
-                    color.unwrap_or(Color::White),
-                );
-            }
-        }
-    }
-}
-
-fn put(frame: &mut Frame, clip: Rect, x: i32, y: i32, ch: char, color: Color) {
-    if x >= i32::from(clip.x)
-        && y >= i32::from(clip.y)
-        && x < i32::from(clip.right())
-        && y < i32::from(clip.bottom())
-    {
-        if let Some(cell) = frame.buffer_mut().cell_mut((x as u16, y as u16)) {
-            cell.set_char(ch).set_fg(color).set_bg(BACKGROUND);
-        }
-    }
+fn rgb(value: (u8, u8, u8)) -> Color {
+    Color::Rgb(value.0, value.1, value.2)
 }
 
 #[derive(Default)]
@@ -207,6 +125,7 @@ pub struct PlayfieldProps<'a> {
     pub state: &'a AppState,
     pub atlas: &'a SpriteAtlas,
     pub layout: BoardLayout,
+    pub components: &'a ComponentRegistry,
 }
 
 impl Component<Action> for Playfield {
@@ -217,132 +136,122 @@ impl Component<Action> for Playfield {
             state,
             atlas,
             layout,
+            components,
         } = props;
         // Sparse deterministic stars; background has no simulation state.
         for (x, y) in [(2, 3), (19, 1), (61, 11), (37, 27), (15, 25), (57, 29)] {
             let (x, y) = layout.point(x, y);
             put(frame, area, x, y, '·', Color::Rgb(40, 49, 68));
         }
-        let mut draw = |id, x, y, animation, tint| {
-            let (x, y) = layout.point(x, y);
-            SpriteComponent.render(
+        for (index, alien) in state.aliens.iter().enumerate() {
+            components.render(
+                AlienComponent,
                 frame,
-                area,
-                SpriteProps {
+                bounds(
+                    area,
+                    layout.point(alien.x, alien.y),
+                    layout.size.alien_bounds(),
+                ),
+                AlienProps {
+                    alien,
                     atlas,
-                    id,
-                    size: layout.size,
-                    frame: animation,
-                    x,
-                    y,
-                    tint,
+                    layout,
+                    animation: state.formation_frame,
                 },
+                format!("alien[{index}]"),
+                alien,
             );
-        };
-        for alien in &state.aliens {
-            let id = match alien.kind {
-                AlienKind::Squid => SpriteId::Squid,
-                AlienKind::Crab => SpriteId::Crab,
-                AlienKind::Octopus => SpriteId::Octopus,
-            };
-            draw(id, alien.x, alien.y, state.formation_frame, None);
         }
         if let Some(saucer) = &state.saucer {
-            draw(
-                SpriteId::Saucer,
-                saucer.x,
-                saucer.y,
-                (state.tick / 8) as usize,
-                None,
-            );
-        }
-        let player_visible = !matches!(state.phase, Phase::Respawning | Phase::GameOver)
-            && (state.player.invulnerable == 0 || (state.tick / 5).is_multiple_of(2));
-        if player_visible {
-            let (w, _) = layout.size.alien_bounds();
-            let x = i32::from(layout.board.x)
-                + (state.player.x * POSITION_SCALE + state.player.motion_fraction) * i32::from(w)
-                    / (5 * POSITION_SCALE);
-            let (_, y) = layout.point(state.player.x, PLAYER_Y);
-            SpriteComponent.render(
+            components.render(
+                SaucerComponent,
                 frame,
-                area,
-                SpriteProps {
-                    atlas,
-                    id: SpriteId::Player,
-                    size: layout.size,
-                    frame: 0,
-                    x,
-                    y,
-                    tint: (state.player.invulnerable > 0).then_some(rgb(sprites::CYAN)),
-                },
-            );
-        }
-        for shield in &state.shields {
-            render_shield(frame, area, layout, shield);
-        }
-        for bullet in &state.bullets {
-            let (x, y) = layout.point(bullet.x, bullet.y);
-            let (glyph, color) = match bullet.owner {
-                Owner::Player => ('╵', sprites::YELLOW),
-                Owner::Alien => (
-                    if (state.tick / 4).is_multiple_of(2) {
-                        '╲'
-                    } else {
-                        '╱'
-                    },
-                    sprites::RED,
+                bounds(
+                    area,
+                    layout.point(saucer.x, saucer.y),
+                    SpriteId::Saucer.bounds(layout.size),
                 ),
-            };
-            put(frame, area, x, y, glyph, rgb(color));
-        }
-        // Bursts expand around the original entity center, rather than shifting
-        // their anchor as each animation frame grows. They draw above shields.
-        for explosion in &state.explosions {
-            let (x, y) = layout.point(explosion.x, explosion.y);
-            let (entity_w, entity_h) = layout.size.alien_bounds();
-            let (burst_w, burst_h) = SpriteId::Explosion.bounds(layout.size);
-            SpriteComponent.render(
-                frame,
-                area,
-                SpriteProps {
+                SaucerProps {
+                    saucer,
                     atlas,
-                    id: SpriteId::Explosion,
-                    size: layout.size,
-                    frame: explosion.frame(),
-                    x: x + (i32::from(entity_w) - i32::from(burst_w)) / 2,
-                    y: y + (i32::from(entity_h) - i32::from(burst_h)) / 2,
-                    tint: None,
+                    layout,
+                    tick: state.tick,
                 },
+                "saucer",
+                saucer,
             );
         }
-    }
-}
-
-fn render_shield(frame: &mut Frame, clip: Rect, layout: BoardLayout, shield: &Shield) {
-    let (x, y) = layout.point(shield.x, shield.y);
-    let (w, h) = layout.size.alien_bounds();
-    let width = (7 * i32::from(w) + 4) / 5;
-    let height = (6 * i32::from(h) + 3) / 4;
-    for row in 0..height {
-        for col in 0..width {
-            let source_x = shield.x + col * 7 / width;
-            let top = shield.occupied(source_x, shield.y + row * 2 * 6 / (height * 2));
-            let bottom = shield.occupied(source_x, shield.y + (row * 2 + 1) * 6 / (height * 2));
-            let glyph = match (top, bottom) {
-                (true, true) => '█',
-                (true, false) => '▀',
-                (false, true) => '▄',
-                _ => continue,
-            };
-            let t = row as f32 / (height - 1).max(1) as f32;
-            let channel = |top: f32, bottom: f32| (top + (bottom - top) * t) as u8;
-            let color = Color::Rgb(
-                channel(187.0, 41.0),
-                channel(254.0, 138.0),
-                channel(171.0, 114.0),
+        let (entity_width, entity_height) = layout.size.alien_bounds();
+        let player_x = i32::from(layout.board.x)
+            + (state.player.x * POSITION_SCALE + state.player.motion_fraction)
+                * i32::from(entity_width)
+                / (5 * POSITION_SCALE);
+        let (_, player_y) = layout.point(state.player.x, PLAYER_Y);
+        components.render(
+            PlayerComponent,
+            frame,
+            bounds(area, (player_x, player_y), (entity_width, entity_height)),
+            PlayerProps {
+                player: &state.player,
+                atlas,
+                layout,
+                phase: state.phase,
+                tick: state.tick,
+            },
+            "player",
+            &state.player,
+        );
+        for (index, shield) in state.shields.iter().enumerate() {
+            components.render(
+                ShieldComponent,
+                frame,
+                bounds(
+                    area,
+                    layout.point(shield.x, shield.y),
+                    (
+                        (7 * u32::from(entity_width)).div_ceil(5) as u16,
+                        (6 * u32::from(entity_height)).div_ceil(4) as u16,
+                    ),
+                ),
+                ShieldProps { shield, layout },
+                format!("shield[{index}]"),
+                shield,
             );
-            put(frame, clip, x + col, y + row, glyph, color);
+        }
+        for (index, bullet) in state.bullets.iter().enumerate() {
+            components.render(
+                BulletComponent,
+                frame,
+                bounds(area, layout.point(bullet.x, bullet.y), (1, 1)),
+                BulletProps {
+                    bullet,
+                    layout,
+                    tick: state.tick,
+                },
+                format!("bullet[{index}]"),
+                bullet,
+            );
+        }
+        // Explosions draw last so their bursts appear above shields and shots.
+        for (index, explosion) in state.explosions.iter().enumerate() {
+            let (x, y) = layout.point(explosion.x, explosion.y);
+            let (width, height) = SpriteId::Explosion.bounds(layout.size);
+            let position = (
+                x + (i32::from(entity_width) - i32::from(width)) / 2,
+                y + (i32::from(entity_height) - i32::from(height)) / 2,
+            );
+            components.render(
+                ExplosionComponent,
+                frame,
+                bounds(area, position, (width, height)),
+                ExplosionProps {
+                    explosion,
+                    atlas,
+                    layout,
+                },
+                format!("explosion[{index}]"),
+                explosion,
+            );
         }
     }
 }
@@ -361,7 +270,7 @@ impl Component<Action> for Hud {
             Span::styled("SCORE ", Style::default().fg(MUTED)),
             Span::styled(
                 format!("{:06}", props.state.score),
-                Style::default().fg(rgb(sprites::WHITE)),
+                Style::default().fg(Color::Reset),
             ),
             Span::styled(
                 format!("    WAVE {:02}", props.state.wave),
@@ -406,36 +315,35 @@ impl Component<Action> for PhaseOverlay {
         let state = props.state;
         let (title, lines, height) = match state.phase {
             Phase::Title => (
-                " SPACE INVADERS ",
+                "SPACE INVADERS",
                 vec![
                     "A small invasion. A very small ship.".to_string(),
-                    String::new(),
-                    String::new(),
-                    String::new(),
-                    "ENTER  launch       Q  quit".to_string(),
+                    "ENTER launch · Q quit".to_string(),
                 ],
-                9,
+                10,
             ),
             Phase::Paused => (
-                " PAUSED ",
+                "PAUSED",
                 vec![
                     "P / ESC  resume".to_string(),
+                    String::new(),
                     "R  restart       Q  quit".to_string(),
                 ],
-                5,
+                7,
             ),
             Phase::GameOver => (
-                " GAME OVER ",
+                "GAME OVER",
                 vec![
                     format!("SCORE {:06}    WAVE {}", state.score, state.wave),
+                    String::new(),
                     "ENTER / R  play again".to_string(),
                 ],
-                5,
+                7,
             ),
             Phase::WaveClear => (
-                " SECTOR CLEAR ",
+                "SECTOR CLEAR",
                 vec![format!("Wave {} incoming…", state.wave + 1)],
-                4,
+                5,
             ),
             _ => return,
         };
@@ -448,47 +356,71 @@ impl Component<Action> for PhaseOverlay {
             height,
         );
         let mut content = |frame: &mut Frame, inner: Rect| {
+            let [heading, _, body] = Layout::vertical([
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Min(1),
+            ])
+            .areas(inner.inner(Margin::new(2, 1)));
             frame.render_widget(
-                Paragraph::new(title).style(Style::default().fg(rgb(sprites::CYAN)).bg(BACKGROUND)),
-                Rect::new(
-                    popup.x + 2,
-                    popup.y,
-                    (title.chars().count() as u16).min(popup.width.saturating_sub(4)),
-                    1,
+                Paragraph::new(title).centered().style(
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
                 ),
-            );
-            frame.render_widget(
-                Paragraph::new(lines.join("\n"))
-                    .centered()
-                    .style(Style::default().fg(rgb(sprites::WHITE))),
-                inner,
+                heading,
             );
             if state.phase == Phase::Title {
-                for (offset, id) in [
-                    (8, SpriteId::Squid),
-                    (19, SpriteId::Crab),
-                    (30, SpriteId::Octopus),
-                ] {
+                let [tagline, _, previews, _, controls] = Layout::vertical([
+                    Constraint::Length(1),
+                    Constraint::Length(1),
+                    Constraint::Length(2),
+                    Constraint::Length(1),
+                    Constraint::Length(1),
+                ])
+                .areas(body);
+                frame.render_widget(
+                    Paragraph::new(lines[0].as_str())
+                        .centered()
+                        .style(Style::default().fg(Color::Gray)),
+                    tagline,
+                );
+                frame.render_widget(
+                    Paragraph::new(lines[1].as_str())
+                        .centered()
+                        .style(Style::default().fg(Color::White)),
+                    controls,
+                );
+                let columns: [Rect; 3] =
+                    Layout::horizontal([Constraint::Ratio(1, 3); 3]).areas(previews);
+                for (column, id) in
+                    columns
+                        .into_iter()
+                        .zip([SpriteId::Squid, SpriteId::Crab, SpriteId::Octopus])
+                {
+                    let (width, _) = id.bounds(SpriteSize::Small);
                     SpriteComponent.render(
                         frame,
-                        inner,
+                        column,
                         SpriteProps {
                             atlas: props.atlas,
                             id,
                             size: SpriteSize::Small,
                             frame: 0,
-                            x: i32::from(popup.x + offset),
-                            y: i32::from(popup.y + 3),
+                            x: i32::from(column.x + column.width.saturating_sub(width) / 2),
+                            y: i32::from(column.y),
                             tint: None,
                         },
                     );
                 }
+            } else {
+                frame.render_widget(
+                    Paragraph::new(lines.join("\n"))
+                        .centered()
+                        .style(Style::default().fg(Color::White)),
+                    body,
+                );
             }
-        };
-        let border = BorderStyle {
-            style: Style::default().fg(rgb(sprites::CYAN)),
-            focused_style: None,
-            ..BorderStyle::default()
         };
         Modal.render(
             frame,
@@ -497,10 +429,7 @@ impl Component<Action> for PhaseOverlay {
                 is_open: true,
                 is_focused: true,
                 area: popup,
-                style: ModalStyle {
-                    dim_factor: 0.68,
-                    ..ModalStyle::with_bg_and_border(BACKGROUND, border)
-                },
+                style: ModalStyle::with_bg(Color::Rgb(35, 35, 45)),
                 behavior: ModalBehavior {
                     close_on_esc: state.phase == Phase::Paused,
                     close_on_backdrop: false,
@@ -516,10 +445,22 @@ impl Component<Action> for PhaseOverlay {
 pub struct GameUi {
     pub atlas: SpriteAtlas,
     pub sizing: SpriteSizing,
+    pub components: ComponentRegistry,
 }
 
 impl GameUi {
     pub fn render(&mut self, frame: &mut Frame, area: Rect, state: &AppState) {
+        self.components.begin_frame();
+        self.components.record::<Self>(
+            area,
+            "game",
+            &serde_json::json!({
+                "phase": state.phase,
+                "viewport_width": state.viewport_width,
+                "viewport_height": state.viewport_height,
+                "sizing": format!("{:?}", self.sizing),
+            }),
+        );
         frame.render_widget(
             Block::default().style(Style::default().bg(BACKGROUND)),
             area,
@@ -538,36 +479,56 @@ impl GameUi {
             );
             return;
         };
-        Hud.render(
+        self.components.render(
+            Hud,
             frame,
             Rect::new(layout.board.x, layout.board.y - 1, layout.board.width, 1),
             HudProps {
                 state,
                 atlas: &self.atlas,
             },
+            "hud",
+            &serde_json::json!({"score": state.score, "lives": state.lives, "wave": state.wave}),
         );
-        Playfield.render(
+        self.components.render(
+            Playfield,
             frame,
             layout.board,
             PlayfieldProps {
                 state,
                 atlas: &self.atlas,
                 layout,
+                components: &self.components,
             },
+            "playfield",
+            &serde_json::json!({
+                "tick": state.tick,
+                "aliens": state.aliens.len(),
+                "bullets": state.bullets.len(),
+                "explosions": state.explosions.len(),
+                "formation_frame": state.formation_frame,
+                "formation_direction": state.formation_direction,
+            }),
         );
-        Controls::default().render(
+        self.components.render(
+            Controls::default(),
             frame,
             Rect::new(area.x, layout.board.bottom(), area.width, 1),
             state,
+            "controls",
+            &serde_json::json!({"held_keys": state.player.held_keys}),
         );
         // Render the modal last so it dims the playfield, HUD, and controls.
-        PhaseOverlay.render(
+        self.components.render(
+            PhaseOverlay,
             frame,
             layout.board,
             OverlayProps {
                 state,
                 atlas: &self.atlas,
             },
+            "phase-overlay",
+            &serde_json::json!({"phase": state.phase, "phase_timer": state.phase_timer}),
         );
     }
 }

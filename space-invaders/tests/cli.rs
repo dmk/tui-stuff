@@ -172,7 +172,7 @@ fn default_headless_frame_is_the_title_screen() {
     let output = run(&["--debug-render-once"]);
     let text = String::from_utf8(output.stdout).unwrap();
     assert!(text.contains("SPACE INVADERS"));
-    assert!(text.contains("ENTER  launch"));
+    assert!(text.contains("ENTER launch"));
 }
 
 #[test]
@@ -235,4 +235,24 @@ fn default_sizing_grows_to_fit_but_compact_can_be_requested() {
     let compact = String::from_utf8(run(&compact_args).stdout).unwrap();
     assert!(compact.contains("▘▀ ▀▝"));
     assert!(!compact.contains("▟█▀█▀█▀█▙"));
+}
+
+#[cfg(unix)]
+#[test]
+fn remote_debug_socket_cleans_up_and_preserves_headless_output() {
+    let temp = TempDir::new();
+    let socket = temp.file("debug.sock");
+    let plain = run(&["--debug-render-once"]);
+    let remote = run(&["--debug-render-once", "--debug-socket", &socket]);
+    assert_eq!(plain.stdout, remote.stdout);
+    assert!(!std::path::Path::new(&socket).exists());
+
+    // An occupied path must cause a clear failure without overwriting its owner.
+    std::fs::write(&socket, "existing file").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_space-invaders"))
+        .args(["--debug-render-once", "--debug-socket", &socket])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert_eq!(std::fs::read_to_string(&socket).unwrap(), "existing file");
 }

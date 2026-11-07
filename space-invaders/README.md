@@ -4,6 +4,10 @@ A tiny Unicode arcade game built with **tui-dispatch 0.7.1**, **Artbox 0.2**,
 and **Ratatui 0.30**. A classic 55-alien formation, destructible half-cell shields,
 a mystery saucer, three lives, and increasingly fast waves.
 
+The `tui-dispatch` crates use Cargo path dependencies from the sibling
+`../tui-dispatch` checkout. Its debugger toggles on F12 presses only, so held-key
+keyboard support does not close the overlay on key release.
+
 ```sh
 cargo run --manifest-path space-invaders/Cargo.toml
 ```
@@ -78,16 +82,52 @@ into deeper shadows. The richer palette has 15% softer contrast and blends acros
 columns as well as rows. Bunkers shade from lime toward teal. Six-stage radial-gradient explosions expand
 from a white flash into a gold burst, orange sparks, and fading red embers over
 480 ms. The final ship's explosion finishes behind the game-over modal.
-A shared sprite component blits non-space cells into Ratatui for playfield
-entities, life icons, and title previews. Shields render their damaged pixel
-masks directly. The game uses Artbox's grid API without its older Ratatui
+Reusable components in `src/components/` render aliens, the player, shields,
+bullets, the saucer, and explosions. `Playfield` composes them in drawing order;
+each component receives its entity state plus the layout and timing it needs.
+Entity state remains in `AppState`, with all updates driven by the reducer.
+A shared sprite component blits non-space cells into Ratatui for entity views,
+life icons, and title previews. The shield component draws damaged pixel masks
+directly. The game uses Artbox's grid API without its older Ratatui
 integration. See [SPRITES.md](SPRITES.md) for the original sketches.
 
 Title, pause, game-over, and wave-clear popups use tui-dispatch's `Modal`
 component. Its backdrop dims the entire scene, including the HUD and controls,
-while the popup content stays bright.
+while the popup content stays bright. The game follows the terminal background;
+borderless charcoal popups match the Weather and Minesweeper forms.
 
 ## Scripted debugging
+
+Start with `--debug`, press **F12**, then **C** to inspect components. The view
+lists each alien, shield, bullet, saucer, player, and explosion separately,
+alongside the HUD, playfield, controls, and phase overlay. Expand an entry or
+press Enter for its state, including shield pixels and explosion age. Snapshots
+follow the latest rendered frame and discard removed entities; collection is
+disabled without `--debug`.
+
+For a standalone debugger on macOS or Linux, expose a Unix socket:
+
+```sh
+mkdir -p -m 700 /tmp/space-invaders-debug
+cargo run --manifest-path space-invaders/Cargo.toml -- \
+  --debug --debug-socket /tmp/space-invaders-debug/game.sock
+```
+
+Attach from another terminal, running from this repository root:
+
+```sh
+cargo run --manifest-path ../tui-dispatch/Cargo.toml \
+  -p tui-dispatch-debug --bin tui-dispatch-debug -- \
+  /tmp/space-invaders-debug/game.sock
+```
+
+`--debug-socket` works independently of `--debug`. The remote debugger reads the
+current state and the last 256 dispatches, including ticks, while the game keeps
+running. Disconnect and reconnect without losing that retained history. Add
+`--once` to the debugger command for one JSON snapshot. The socket is removed
+when the game exits; existing paths are never overwritten. Remote inspection
+is read only; component/cell inspection and frame freezing use the in-app F12
+overlay.
 
 Replay files contain the same actions emitted by keyboard input, plus `Tick`
 and `GameAdvanceTicks(n)`. Fifty ticks equal one second of game time without

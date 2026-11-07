@@ -1,44 +1,58 @@
 use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
 use ratatui::{
-    layout::{Alignment, Rect},
+    layout::{Alignment, Margin, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Clear, Paragraph, Sparkline},
+    widgets::{Block, Paragraph, Sparkline},
     Frame,
 };
-use tui_dispatch::{EventKind, EventOutcome};
+use std::rc::Rc;
+use tui_dispatch::{Component, EventKind, EventOutcome};
+use tui_dispatch_components::{Modal, ModalBehavior, ModalProps, ModalStyle};
 
 use crate::{action::Action, patterns::Pattern, state::*};
 
-pub const BACKGROUND: Color = Color::Rgb(8, 12, 20);
-pub const FIELD: Color = Color::Rgb(10, 17, 27);
+pub const BACKGROUND: Color = Color::Reset;
+pub const FIELD: Color = Color::Reset;
 pub const MINT: Color = Color::Rgb(160, 248, 194);
 const CYAN: Color = Color::Rgb(101, 202, 218);
-const TEXT: Color = Color::Rgb(203, 217, 227);
-const MUTED: Color = Color::Rgb(112, 136, 155);
-const LINE: Color = Color::Rgb(36, 56, 73);
+const TEXT: Color = Color::Reset;
+const MUTED: Color = Color::DarkGray;
 const GOLD: Color = Color::Rgb(236, 196, 124);
 
 #[derive(Clone, Copy, Debug)]
 pub struct ScreenLayout {
+    pub panel: Rect,
     pub field: Rect,
-    pub sidebar: Option<Rect>,
+    pub population: Rect,
 }
 
 impl ScreenLayout {
     pub fn new(area: Rect) -> Self {
-        let width = area.width.saturating_sub(4);
-        let height = area.height.saturating_sub(9);
-        let sidebar_width = if area.width >= 105 { 29 } else { 0 };
+        let width = area.width.saturating_sub(4).min(100);
+        let height = area.height.saturating_sub(2).min(40);
+        let panel = Rect::new(
+            area.x + (area.width - width) / 2,
+            area.y + (area.height - height) / 2,
+            width,
+            height,
+        );
+        let chart_height = if height >= 30 { 2 } else { 1 };
+        let chart_width = width.min(72);
         Self {
+            panel,
             field: Rect::new(
-                area.x + 2,
-                area.y + 5,
-                width.saturating_sub(sidebar_width),
-                height,
+                panel.x,
+                panel.y + 3,
+                width,
+                height.saturating_sub(10 + chart_height),
             ),
-            sidebar: (sidebar_width > 0)
-                .then(|| Rect::new(area.x + area.width - 29, area.y + 5, 27, height)),
+            population: Rect::new(
+                panel.x + (width - chart_width) / 2,
+                panel.y + height.saturating_sub(6 + chart_height),
+                chart_width,
+                chart_height,
+            ),
         }
     }
 }
@@ -52,20 +66,24 @@ pub struct BoardView {
     pub rows: i32,
     pub cell_width: u16,
     pub cell_height: u16,
+    /// At 1×, two world rows share one terminal row.
+    pub rows_per_line: u16,
 }
 
 impl BoardView {
     pub fn new(state: &AppState, field: Rect) -> Self {
         let (cell_width, cell_height) = [(1, 1), (2, 1), (4, 2)][state.zoom];
+        let rows_per_line = if state.zoom == 0 { 2 } else { 1 };
         let area = field.inner(ratatui::layout::Margin::new(1, 1));
         let cols = i32::from(area.width / cell_width);
-        let rows = i32::from(area.height / cell_height);
+        let rows = i32::from(area.height * rows_per_line / cell_height);
         Self {
             area,
             cols,
             rows,
             cell_width,
             cell_height,
+            rows_per_line,
             origin_x: (state.camera_x - cols / 2).clamp(0, (WORLD_WIDTH - cols).max(0)),
             origin_y: (state.camera_y - rows / 2).clamp(0, (WORLD_HEIGHT - rows).max(0)),
         }
@@ -83,7 +101,9 @@ impl BoardView {
             return None;
         }
         let x = i32::from((column - self.area.x) / self.cell_width);
-        let y = i32::from((row - self.area.y) / self.cell_height);
+        // Terminal mouse events cannot identify a half-row: target the upper
+        // world cell at 1×. The keyboard cursor can select either half.
+        let y = i32::from((row - self.area.y) * self.rows_per_line / self.cell_height);
         if x >= self.cols || y >= self.rows {
             return None;
         }
@@ -156,14 +176,6 @@ pub fn map_event(event: &EventKind, state: &AppState) -> EventOutcome<Action> {
             };
             if let Some((x, y)) = view.world_at(mouse.column, mouse.row) {
                 alive.map(|alive| Action::CellSet { x, y, alive })
-            } else if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
-                let layout =
-                    ScreenLayout::new(Rect::new(0, 0, state.viewport_width, state.viewport_height));
-                layout.sidebar.and_then(|panel| {
-                    let index = mouse.row.checked_sub(panel.y + 3)? as usize;
-                    (panel.contains((mouse.column, mouse.row).into()) && index < 6)
-                        .then(|| Action::PatternSelect(Pattern::ALL[index]))
-                })
             } else {
                 None
             }
@@ -196,90 +208,83 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         );
         return;
     }
-    let status = if state.show_help {
-        "HELP"
-    } else if state.running {
-        "EVOLVING"
-    } else {
-        "PAUSED"
-    };
+    let layout = ScreenLayout::new(area);
+    let panel = layout.panel;
+    let row = |y| Rect::new(panel.x, panel.y + y, panel.width, 1);
     write(
         frame,
-        Rect::new(area.x + 2, area.y + 1, 28, 1),
-        Line::from(vec![
-            Span::styled(
-                "✳  L I F E",
-                Style::default().fg(MINT).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("  /  observatory", Style::default().fg(MUTED)),
-        ]),
+        row(0),
+        Line::from("Game of Life").centered().style(
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
     );
     write(
         frame,
-        Rect::new(area.x + area.width - 26, area.y + 1, 24, 1),
-        Line::from(vec![
-            Span::styled(
-                format!("● {status:<9}"),
-                Style::default().fg(if state.running { MINT } else { GOLD }),
-            ),
-            Span::styled("  B3 / S23", Style::default().fg(MUTED)),
-        ]),
+        row(1),
+        Line::from(state.scene.to_uppercase())
+            .centered()
+            .style(Style::default().fg(MUTED)),
     );
+    render_field(frame, state, layout.field);
+    render_population(frame, state, layout.population);
+
+    let status = if state.running { "RUNNING" } else { "PAUSED" };
+    let info_y = panel.height - 5;
     write(
         frame,
-        Rect::new(area.x + 2, area.y + 3, area.width - 4, 1),
+        row(info_y),
         Line::from(vec![
-            Span::styled("GEN ", Style::default().fg(MUTED)),
+            Span::raw("Gen "),
             Span::styled(
-                format!("{:06}    ", state.generation),
+                format!("{:06}", state.generation),
                 Style::default().fg(TEXT),
             ),
-            Span::styled("ALIVE ", Style::default().fg(MUTED)),
+            Span::raw("  ·  Alive "),
+            Span::styled(state.population.to_string(), Style::default().fg(MINT)),
+            Span::raw(format!("  ·  {} gen/s  ·  ", state.speed())),
             Span::styled(
-                format!("{:05}    ", state.population),
-                Style::default().fg(MINT),
+                status,
+                Style::default().fg(if state.running { MUTED } else { GOLD }),
             ),
-            Span::styled(
-                format!("{} gen/s", state.speed()),
-                Style::default().fg(CYAN),
-            ),
-        ]),
+        ])
+        .centered()
+        .style(Style::default().fg(MUTED)),
     );
-
-    let layout = ScreenLayout::new(area);
-    render_field(frame, state, layout.field);
-    if let Some(panel) = layout.sidebar {
-        render_sidebar(frame, state, panel);
-    }
-    let footer_y = area.y + area.height - 3;
+    let key = |text| Span::styled(text, Style::default().fg(TEXT));
     write(
         frame,
-        Rect::new(area.x + 2, footer_y, area.width - 4, 1),
+        row(info_y + 2),
         Line::from(vec![
-            Span::styled("SPACE", Style::default().fg(MINT)),
-            Span::raw(" run/pause  "),
-            Span::styled("N", Style::default().fg(MINT)),
-            Span::raw(" step  "),
-            Span::styled("1–6", Style::default().fg(MINT)),
-            Span::raw(" select  "),
-            Span::styled("R", Style::default().fg(MINT)),
-            Span::raw(" load  "),
-            Span::styled("?", Style::default().fg(MINT)),
-            Span::raw(" help"),
+            key("space"),
+            Span::raw(" run/pause · "),
+            key("n"),
+            Span::raw(" step · "),
+            key("1–6"),
+            Span::raw(" pattern · "),
+            key("?"),
+            Span::raw(" help · "),
+            key("q"),
+            Span::raw(" quit"),
         ])
+        .centered()
         .style(Style::default().fg(MUTED)),
     );
     write(
         frame,
-        Rect::new(area.x + 2, footer_y + 1, area.width - 4, 1),
-        Line::from(if layout.sidebar.is_some() {
-            format!(
-                "Paint / erase: mouse   WASD pan   Z zoom   ± speed   {} edges   Q quit",
-                if state.wrapping { "wrapping" } else { "fixed" }
-            )
-        } else {
-            format!("↵ stamp {}   Z zoom   Q quit", state.selected.name())
-        })
+        row(info_y + 3),
+        Line::from(vec![
+            Span::styled(state.selected.name(), Style::default().fg(CYAN)),
+            Span::raw(" · "),
+            key("r"),
+            Span::raw(" load · "),
+            key("↵"),
+            Span::raw(" stamp · "),
+            key("z"),
+            Span::raw(format!(" zoom {}×", [1, 2, 4][state.zoom])),
+        ])
+        .centered()
         .style(Style::default().fg(MUTED)),
     );
     if state.show_help {
@@ -289,27 +294,10 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
 
 fn render_field(frame: &mut Frame, state: &AppState, area: Rect) {
     let view = BoardView::new(state, area);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(LINE))
-        .style(Style::default().bg(FIELD))
-        .title(
-            Line::from(format!("  {}  ", state.scene.to_uppercase()))
-                .style(Style::default().fg(MUTED)),
-        )
-        .title_bottom(
-            Line::from(format!(
-                "  {}×{} world · view {},{} · {}×  ",
-                WORLD_WIDTH,
-                WORLD_HEIGHT,
-                view.origin_x,
-                view.origin_y,
-                [1, 2, 4][state.zoom]
-            ))
-            .style(Style::default().fg(MUTED)),
-        );
-    frame.render_widget(block, area);
+    if view.rows_per_line == 2 {
+        render_half_cells(frame, state, view);
+        return;
+    }
     for row in 0..view.rows {
         for col in 0..view.cols {
             let (x, y) = (view.origin_x + col, view.origin_y + row);
@@ -325,15 +313,40 @@ fn render_field(frame: &mut Frame, state: &AppState, area: Rect) {
                     let cell = &mut frame.buffer_mut()[(px + dx, py + dy)];
                     if age > 0 {
                         let (bright, base) = age_colors(age);
-                        cell.set_char('▀').set_fg(bright).set_bg(base);
+                        if state.zoom == 2 {
+                            // A 3×3 half-cell square inside a 4×4 slot leaves
+                            // equal horizontal and vertical gutters. Shade the
+                            // cell once from top to bottom, without repeating
+                            // the same bright/dark stripe on both text rows.
+                            let middle = mix_colors(bright, base);
+                            if dx == view.cell_width - 1 {
+                                cell.set_char(' ').set_bg(FIELD);
+                            } else if dy == 0 {
+                                cell.set_char('▀').set_fg(bright).set_bg(middle);
+                            } else {
+                                cell.set_char('▀').set_fg(base).set_bg(FIELD);
+                            }
+                        } else {
+                            cell.set_char('▀').set_fg(bright).set_bg(base);
+                        }
                     } else if state.show_trails && trail > 0 {
-                        cell.set_char('░')
-                            .set_fg(Color::Rgb(23 + trail * 4, 24 + trail * 2, 41 + trail * 5))
-                            .set_bg(FIELD);
+                        let color = Color::Rgb(23 + trail * 4, 24 + trail * 2, 41 + trail * 5);
+                        let glyph = if state.zoom == 2 {
+                            if dx == view.cell_width - 1 {
+                                ' '
+                            } else if dy == 0 {
+                                '░'
+                            } else {
+                                '▀'
+                            }
+                        } else {
+                            '░'
+                        };
+                        cell.set_char(glyph).set_fg(color).set_bg(FIELD);
                     } else {
                         let dot = state.show_grid && x % 4 == 0 && y % 4 == 0 && dx == 0 && dy == 0;
                         cell.set_char(if dot { '·' } else { ' ' })
-                            .set_fg(Color::Rgb(35, 52, 66))
+                            .set_fg(Color::DarkGray)
                             .set_bg(FIELD);
                     }
                     if state.cursor_visible && (x, y) == (state.cursor_x, state.cursor_y) {
@@ -344,6 +357,46 @@ fn render_field(frame: &mut Frame, state: &AppState, area: Rect) {
                     }
                 }
             }
+        }
+    }
+}
+
+fn render_half_cells(frame: &mut Frame, state: &AppState, view: BoardView) {
+    let color_at = |x, y| {
+        let index = AppState::index(x, y)?;
+        if state.cursor_visible && (x, y) == (state.cursor_x, state.cursor_y) {
+            Some(GOLD)
+        } else if state.cells[index] > 0 {
+            Some(age_colors(state.cells[index]).0)
+        } else if state.show_trails && state.trails[index] > 0 {
+            let trail = state.trails[index];
+            Some(Color::Rgb(23 + trail * 4, 24 + trail * 2, 41 + trail * 5))
+        } else {
+            None
+        }
+    };
+    for row in 0..view.area.height {
+        for col in 0..view.area.width {
+            let x = view.origin_x + i32::from(col);
+            let y = view.origin_y + i32::from(row) * 2;
+            let (glyph, fg, bg) = match (color_at(x, y), color_at(x, y + 1)) {
+                (Some(top), Some(bottom)) => ('▀', top, bottom),
+                (Some(top), None) => ('▀', top, FIELD),
+                (None, Some(bottom)) => ('▄', bottom, FIELD),
+                (None, None) => (
+                    if state.show_grid && x % 4 == 0 && (y % 4 == 0 || (y + 1) % 4 == 0) {
+                        '·'
+                    } else {
+                        ' '
+                    },
+                    Color::DarkGray,
+                    FIELD,
+                ),
+            };
+            frame.buffer_mut()[(view.area.x + col, view.area.y + row)]
+                .set_char(glyph)
+                .set_fg(fg)
+                .set_bg(bg);
         }
     }
 }
@@ -362,146 +415,160 @@ pub fn age_colors(age: u16) -> (Color, Color) {
     )
 }
 
-fn render_sidebar(frame: &mut Frame, state: &AppState, area: Rect) {
-    let put = |frame: &mut Frame, y, text: Line<'_>| {
-        if y < area.height {
-            write(
-                frame,
-                Rect::new(area.x + 1, area.y + y, area.width - 2, 1),
-                text,
-            );
-        }
-    };
-    put(
-        frame,
-        1,
-        Line::from("PATTERN LIBRARY").style(Style::default().fg(MUTED)),
-    );
-    for (index, pattern) in Pattern::ALL.iter().enumerate() {
-        let selected = *pattern == state.selected;
-        put(
-            frame,
-            index as u16 + 3,
-            Line::from(format!(
-                "{} {}  {}",
-                if selected { "▸" } else { " " },
-                index + 1,
-                pattern.name()
-            ))
-            .style(Style::default().fg(if selected { MINT } else { MUTED })),
-        );
+fn mix_colors(a: Color, b: Color) -> Color {
+    match (a, b) {
+        (Color::Rgb(ar, ag, ab), Color::Rgb(br, bg, bb)) => Color::Rgb(
+            ((u16::from(ar) + u16::from(br)) / 2) as u8,
+            ((u16::from(ag) + u16::from(bg)) / 2) as u8,
+            ((u16::from(ab) + u16::from(bb)) / 2) as u8,
+        ),
+        _ => a,
     }
-    for (i, line) in state.selected.description().lines().enumerate() {
-        put(
-            frame,
-            11 + i as u16,
-            Line::from(line).style(Style::default().fg(TEXT)),
-        );
-    }
-    put(
+}
+
+fn render_population(frame: &mut Frame, state: &AppState, area: Rect) {
+    let label_width = 12.min(area.width);
+    write(
         frame,
-        15,
-        Line::from("R replace  ↵ stamp here").style(Style::default().fg(CYAN)),
+        Rect::new(area.x, area.bottom() - 1, label_width, 1),
+        Line::from("population").style(Style::default().fg(MUTED)),
     );
-    put(
-        frame,
-        17,
-        Line::from("POPULATION / LAST 80").style(Style::default().fg(MUTED)),
+    let chart = Rect::new(
+        area.x + label_width,
+        area.y,
+        area.width.saturating_sub(label_width),
+        area.height,
     );
-    if area.height >= 24 {
-        frame.render_widget(
-            Sparkline::default()
-                .data(&state.history)
-                .style(Style::default().fg(CYAN))
-                .max(state.history.iter().copied().max().unwrap_or(1).max(1)),
-            Rect::new(area.x + 1, area.y + 19, area.width - 2, 3),
-        );
-    }
-    put(
-        frame,
-        23,
-        Line::from(vec![
-            Span::styled(format!("+{:<6}", state.births), Style::default().fg(MINT)),
-            Span::styled(
-                format!("−{:<6}", state.deaths),
-                Style::default().fg(Color::Rgb(180, 125, 170)),
-            ),
-            Span::styled("last step", Style::default().fg(MUTED)),
-        ]),
-    );
-    put(
-        frame,
-        25,
-        Line::from(format!(
-            "{:.2}% of the world alive",
-            state.population as f64 * 100.0 / CELL_COUNT as f64
-        ))
-        .style(Style::default().fg(MUTED)),
-    );
-    put(
-        frame,
-        28,
-        Line::from("CELL AGE").style(Style::default().fg(MUTED)),
-    );
-    put(
-        frame,
-        30,
-        Line::from(vec![
-            Span::styled("██ ", Style::default().fg(MINT)),
-            Span::raw("new  "),
-            Span::styled("██ ", Style::default().fg(CYAN)),
-            Span::raw("grown  "),
-            Span::styled("██ ", Style::default().fg(GOLD)),
-            Span::raw("old"),
-        ])
-        .style(Style::default().fg(MUTED)),
-    );
-    put(
-        frame,
-        32,
-        Line::from("░ fading memory of life").style(Style::default().fg(Color::Rgb(148, 111, 169))),
+    // Keep the most recent generations visible when the chart is narrower
+    // than the stored history, including after a terminal resize.
+    let start = state.history.len().saturating_sub(usize::from(chart.width));
+    let history = &state.history[start..];
+    frame.render_widget(
+        Sparkline::default()
+            .data(history)
+            .max(history.iter().copied().max().unwrap_or(1).max(1))
+            .style(Style::default().fg(CYAN)),
+        chart,
     );
 }
 
 fn render_help(frame: &mut Frame, area: Rect) {
-    let width = 58.min(area.width - 2);
-    let height = 20.min(area.height);
+    let width = 58.min(area.width);
+    let height = 21.min(area.height);
     let popup = Rect::new(
         area.x + (area.width - width) / 2,
         area.y + (area.height - height) / 2,
         width,
         height,
     );
-    frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .title("  FIELD NOTES  ")
-        .border_style(Style::default().fg(CYAN))
-        .style(Style::default().bg(BACKGROUND).fg(TEXT));
-    let inner = popup.inner(ratatui::layout::Margin::new(2, 1));
-    frame.render_widget(block, popup);
-    frame.render_widget(
-        Paragraph::new(vec![
-            Line::from("Three neighbors bring a cell to life."),
-            Line::from("Two or three keep it alive. All else fades."),
-            Line::from(""),
-            Line::from("Space       Run / pause     N      Single step"),
-            Line::from("+ / -       Speed           Z      Cycle zoom"),
-            Line::from("1–6         Select pattern  R      Replace world"),
-            Line::from("Enter       Stamp at cursor X      Toggle cell"),
-            Line::from("Arrows      Move cursor     WASD   Pan camera"),
-            Line::from("Home / 0    Recenter        Wheel  Pan vertically"),
-            Line::from("Left drag   Paint cells     Right drag   Erase"),
-            Line::from("C           Clear world     F      Random soup"),
-            Line::from("B           Edge wrapping   G      Grid dots"),
-            Line::from("T           Fading trails   Q      Quit"),
-            Line::from(""),
-            Line::from("Edits pause time. Patterns clip at world edges."),
-            Line::from("Help suspends time. Esc / ? closes these notes."),
-        ])
-        .style(Style::default().fg(TEXT)),
-        inner,
+    let mut content = |frame: &mut Frame, inner: Rect| {
+        let inner = inner.inner(Margin::new(2, 1));
+        let row = |y| Rect::new(inner.x, inner.y + y, inner.width, 1);
+        write(
+            frame,
+            row(0),
+            Line::from("Game of Life").centered().style(
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        );
+        let columns = (inner.width - 2) / 2;
+        for (index, ((left_key, left_action), (right_key, right_action))) in [
+            (("Space", "Run / pause"), ("N", "Single step")),
+            (("+ / -", "Speed"), ("Z", "Zoom")),
+            (("Arrows", "Move cursor"), ("WASD", "Pan / wheel")),
+            (("Mouse", "Paint / erase"), ("Home / 0", "Recenter")),
+            (("Enter", "Stamp pattern"), ("X", "Toggle cell")),
+            (("R", "Load pattern"), ("C", "Clear")),
+            (("F", "Random soup"), ("B", "Wrap edges")),
+            (("G", "Grid"), ("T", "Trails")),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            for (column, key, action) in [(0, left_key, left_action), (1, right_key, right_action)]
+            {
+                write(
+                    frame,
+                    Rect::new(
+                        inner.x + column * (columns + 2),
+                        inner.y + index as u16 + 2,
+                        columns,
+                        1,
+                    ),
+                    Line::from(vec![
+                        Span::styled(format!("{key:<10}"), Style::default().fg(Color::White)),
+                        Span::styled(action, Style::default().fg(Color::Gray)),
+                    ]),
+                );
+            }
+        }
+        write(
+            frame,
+            row(11),
+            Line::from("Patterns").style(Style::default().fg(Color::Gray)),
+        );
+        for (index, name) in [
+            "Garden",
+            "Gosper gun",
+            "Pulsar",
+            "Glider",
+            "R-pentomino",
+            "Acorn",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let column_width = inner.width / 3;
+            write(
+                frame,
+                Rect::new(
+                    inner.x + (index % 3) as u16 * column_width,
+                    inner.y + 12 + (index / 3) as u16,
+                    column_width,
+                    1,
+                ),
+                Line::from(vec![
+                    Span::styled(
+                        format!("{}  ", index + 1),
+                        Style::default().fg(Color::White),
+                    ),
+                    Span::styled(name, Style::default().fg(Color::Gray)),
+                ]),
+            );
+        }
+        write(
+            frame,
+            row(15),
+            Line::from("3 neighbors: birth · 2–3: survive")
+                .centered()
+                .style(Style::default().fg(Color::Gray)),
+        );
+        write(
+            frame,
+            row(17),
+            Line::from(vec![
+                Span::styled("Esc / ?", Style::default().fg(Color::White)),
+                Span::styled("  close     ", Style::default().fg(Color::Gray)),
+                Span::styled("Q", Style::default().fg(Color::White)),
+                Span::styled("  quit", Style::default().fg(Color::Gray)),
+            ])
+            .centered(),
+        );
+    };
+    Modal.render(
+        frame,
+        area,
+        ModalProps {
+            is_open: true,
+            is_focused: true,
+            area: popup,
+            style: ModalStyle::with_bg(Color::Rgb(35, 35, 45)),
+            behavior: ModalBehavior::default(),
+            on_close: Rc::new(|| Action::HelpToggle),
+            render_content: &mut content,
+        },
     );
 }
 

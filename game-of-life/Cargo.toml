@@ -5,6 +5,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
+tui-dispatch-components = "0.7.1"
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.29"
 ratatui = "0.30"
