@@ -19,12 +19,12 @@ Conway's Game of Life: age-colored cells, fading trails, pattern planting, and r
 
 <img src="./assets/screens/game-of-life.png" width="400" alt="Life cellular observatory">
 
-## WIP / trying stuff out
-
 ### [minesweeper](./minesweeper)
 Safe first reveals, animated empty areas, and custom boards up to 120×120.
 
 <img src="./assets/screens/minesweeper.png" width="400" alt="Minesweeper">
+
+## WIP / trying stuff out
 
 ### [pokeapi](./pokeapi)
 Browse Pokemon info using [PokeAPI](https://pokeapi.co/)
